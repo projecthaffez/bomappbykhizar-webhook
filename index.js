@@ -5,168 +5,120 @@ import fs from "fs";
 const app = express();
 app.use(express.json());
 
-// 🧠 Config
-const VERIFY_TOKEN = "bomappbykhizar123";
 const PAGE_ACCESS_TOKEN = process.env.PAGE_ACCESS_TOKEN;
 const PAGE_ID = process.env.PAGE_ID;
-const SEND_SECRET = process.env.SEND_SECRET || "khizarBulkKey123";
-const SYNC_SECRET = process.env.SYNC_SECRET || SEND_SECRET;
-const USERS_FILE = "users.json";
+const SECRET = process.env.SEND_SECRET || "khizarBulkKey123";
 
-// 🧩 Helper functions
-function readUsersFile() {
+let users = [];
+if (fs.existsSync("users.json"))
+  users = JSON.parse(fs.readFileSync("users.json"));
+const saveUsers = () =>
+  fs.writeFileSync("users.json", JSON.stringify(users, null, 2));
+
+function generatePromo() {
+  const promos = [
+    "You're online now! 🎯 Claim your 200% bonus instantly!",
+    "Don’t miss today’s 180% bonus — available only for active players!",
+    "Deposit now and double your winnings before the timer runs out!",
+    "Ready to win big? 💰 Get 190% extra on your next play!",
+    "Your lucky hour just started! 🎉 Grab your 175% reward now!"
+  ];
+  return promos[Math.floor(Math.random() * promos.length)];
+}
+
+async function getFirstName(userId) {
   try {
-    const raw = fs.readFileSync(USERS_FILE, "utf8");
-    return JSON.parse(raw);
-  } catch (e) {
-    return { users: [] };
+    const res = await fetch(
+      `https://graph.facebook.com/v18.0/${userId}?fields=first_name&access_token=${PAGE_ACCESS_TOKEN}`
+    );
+    const data = await res.json();
+    return data.first_name || "Player";
+  } catch {
+    return "Player";
   }
 }
 
-function writeUsersFile(obj) {
-  fs.writeFileSync(USERS_FILE, JSON.stringify(obj, null, 2));
+async function sendMessage(id, msg) {
+  const url = `https://graph.facebook.com/v18.0/me/messages?access_token=${PAGE_ACCESS_TOKEN}`;
+  await fetch(url, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ recipient: { id }, message: { text: msg } })
+  });
 }
 
-// ✅ 1. Verify webhook (Meta setup)
-app.get("/webhook", (req, res) => {
-  const mode = req.query["hub.mode"];
-  const token = req.query["hub.verify_token"];
-  const challenge = req.query["hub.challenge"];
-  if (mode && token === VERIFY_TOKEN) return res.status(200).send(challenge);
-  res.sendStatus(403);
-});
+async function getActiveUsers() {
+  const res = await fetch(
+    `https://graph.facebook.com/v18.0/${PAGE_ID}/conversations?fields=participants.limit(100){id},updated_time&limit=100&access_token=${PAGE_ACCESS_TOKEN}`
+  );
+  const data = await res.json();
+  const now = new Date();
+  const active = [];
 
-// ✅ 2. Handle messages (auto-reply + save users)
-app.post("/webhook", async (req, res) => {
-  if (req.body.object === "page") {
-    for (const entry of req.body.entry) {
-      const event = entry.messaging[0];
-      if (event.sender?.id && event.message) {
-        const senderId = event.sender.id;
-        saveUser(senderId);
-        const text = event.message.text || "👋 Hello!";
-        await sendMessage(senderId, `You said: "${text}" 😊`);
+  if (data.data) {
+    for (const c of data.data) {
+      const updated = new Date(c.updated_time);
+      const mins = (now - updated) / (1000 * 60);
+      if (mins <= 10) {
+        const uid = c.participants?.data?.find((u) => u.id !== PAGE_ID)?.id;
+        if (uid) active.push(uid);
       }
     }
-    return res.status(200).send("EVENT_RECEIVED");
   }
-  res.sendStatus(404);
-});
-
-function saveUser(id) {
-  try {
-    const data = readUsersFile();
-    if (!data.users.includes(id)) {
-      data.users.push(id);
-      writeUsersFile(data);
-      console.log(`📁 Saved new user: ${id}`);
-    }
-  } catch (e) {
-    console.error("❌ Error saving user:", e);
-  }
+  return active;
 }
 
-// ✅ 3. Send single message
-async function sendMessage(recipientId, text) {
-  const url = `https://graph.facebook.com/v18.0/me/messages?access_token=${PAGE_ACCESS_TOKEN}`;
-  const body = { recipient: { id: recipientId }, message: { text } };
+app.post("/auto-promo", async (req, res) => {
+  if (req.body.secret !== SECRET) return res.status(401).json({ error: "Unauthorized" });
+  console.log("\n📡 Checking for active users...");
+  const now = Date.now();
 
   try {
-    const res = await fetch(url, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(body),
-    });
-    const data = await res.json();
-    if (data.error) console.error("Meta API Error:", data.error);
-    else console.log(`📤 Sent to ${recipientId}`);
-  } catch (e) {
-    console.error("Send error:", e);
-  }
-}
+    const activeUsers = await getActiveUsers();
+    let sent = 0;
 
-// ✅ 4. Bulk sender (manual trigger)
-app.post("/send-bulk", async (req, res) => {
-  const { message, secret } = req.body;
-  if (secret !== SEND_SECRET) return res.status(403).send("Unauthorized");
-
-  const data = readUsersFile();
-  let sent = 0;
-
-  for (const id of data.users) {
-    await sendMessage(id, message);
-    sent++;
-    await new Promise((r) => setTimeout(r, 500));
-  }
-
-  res.send(`✅ Sent to ${sent} users`);
-});
-
-// ✅ 5. Conversation scanner (sync old users)
-async function fetchAllParticipantIds() {
-  if (!PAGE_ACCESS_TOKEN || !PAGE_ID) throw new Error("Missing PAGE_ACCESS_TOKEN or PAGE_ID");
-
-  const base = `https://graph.facebook.com/v18.0/${PAGE_ID}/conversations`;
-  let url = `${base}?fields=participants.limit(100){id}&limit=100&access_token=${PAGE_ACCESS_TOKEN}`;
-  const found = new Set();
-
-  while (url) {
-    console.log("📡 Fetching:", url);
-    const res = await fetch(url);
-    const json = await res.json();
-
-    if (json.error) {
-      console.error("❌ Facebook API Error:", json.error);
-      throw json.error;
-    }
-
-    if (Array.isArray(json.data)) {
-      for (const convo of json.data) {
-        if (convo.participants && Array.isArray(convo.participants.data)) {
-          for (const p of convo.participants.data) {
-            if (p.id && p.id !== PAGE_ID) found.add(p.id);
-          }
+    if (activeUsers.length > 0) {
+      console.log(`🟢 Found ${activeUsers.length} active users`);
+      for (const id of activeUsers) {
+        let user = users.find((u) => u.id === id);
+        if (!user) { user = { id, lastSent: 0 }; users.push(user); }
+        const diff = (now - (user.lastSent || 0)) / (1000 * 60 * 60);
+        if (diff >= 2) {
+          const firstName = await getFirstName(id);
+          const promo = generatePromo();
+          await sendMessage(id, `Hi ${firstName} 👋 ${promo}`);
+          user.lastSent = now;
+          sent++;
+          console.log(`📤 Sent instant promo to ${firstName} (${id})`);
         }
       }
     }
 
-    url = json.paging?.next || null;
-    if (url) await new Promise((r) => setTimeout(r, 300));
-  }
-
-  return Array.from(found);
-}
-
-// ✅ 6. Endpoint to sync users
-app.post("/sync-users", async (req, res) => {
-  try {
-    if (req.body?.secret !== SYNC_SECRET) return res.status(403).send("Unauthorized");
-
-    console.log("🔄 Sync started...");
-    const remoteIds = await fetchAllParticipantIds();
-    console.log(`📦 Found ${remoteIds.length} users from Page conversations.`);
-
-    const local = readUsersFile();
-    const localSet = new Set(local.users);
-    let added = 0;
-
-    for (const id of remoteIds) {
-      if (!localSet.has(id)) {
-        local.users.push(id);
-        localSet.add(id);
-        added++;
+    const hr = new Date().getHours();
+    const fallbackHours = [8, 16, 0];
+    const isFallbackTime = fallbackHours.includes(hr);
+    if (isFallbackTime && activeUsers.length === 0) {
+      console.log("😴 No active users — sending scheduled promo to all inactive players...");
+      for (const u of users) {
+        const diff = (now - (u.lastSent || 0)) / (1000 * 60 * 60);
+        if (diff >= 6) {
+          const firstName = await getFirstName(u.id);
+          const promo = generatePromo();
+          await sendMessage(u.id, `Hi ${firstName} 👋 ${promo}`);
+          u.lastSent = now;
+          sent++;
+          console.log(`📤 Sent fallback promo to ${firstName} (${u.id})`);
+        }
       }
     }
 
-    writeUsersFile(local);
-    console.log(`✅ Sync complete. Added ${added} new users. Total: ${local.users.length}.`);
-    res.send({ added, total: local.users.length });
+    saveUsers();
+    console.log(`✅ Total promos sent: ${sent}`);
+    res.json({ sent, active: activeUsers.length });
   } catch (err) {
-    console.error("❌ Sync error:", err);
-    res.status(500).send({ error: err.message || err });
+    console.error("❌ Error in /auto-promo", err);
+    res.status(500).json({ error: "Internal Server Error" });
   }
 });
 
-// ✅ 7. Start server
-const PORT = process.env.PORT || 10000;
-app.listen(PORT, () => console.log(`🚀 BomAppByKhizar running on port ${PORT}`));
+app.listen(10000, () => console.log("🚀 BomAppByKhizar AI Auto Promo v3.0 running on port 10000"));
