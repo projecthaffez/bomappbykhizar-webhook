@@ -1,20 +1,18 @@
 import express from "express";
-import fetch from "node-fetch";
+import fetch from "node-fetch"; // ✅ use node-fetch v3
 
 const app = express();
 app.use(express.json());
 
-const VERIFY_TOKEN = "bomappbykhizar123";
-const PAGE_ACCESS_TOKEN = process.env.PAGE_ACCESS_TOKEN;
-
-// ✅ Facebook verification
+// ✅ Facebook verification endpoint
 app.get("/webhook", (req, res) => {
+  const VERIFY_TOKEN = "bomappbykhizar123"; // same token you used in Meta dashboard
   const mode = req.query["hub.mode"];
   const token = req.query["hub.verify_token"];
   const challenge = req.query["hub.challenge"];
 
   if (mode && token === VERIFY_TOKEN) {
-    console.log("Webhook verified successfully ✅");
+    console.log("✅ Webhook verified successfully");
     res.status(200).send(challenge);
   } else {
     res.sendStatus(403);
@@ -28,44 +26,50 @@ app.post("/webhook", async (req, res) => {
   if (body.object === "page") {
     body.entry.forEach(async (entry) => {
       const event = entry.messaging[0];
-      console.log("📩 New incoming event:", event);
+      console.log("📩 New event:", event);
 
-      // ✅ If message received, send a reply
+      // Example: Auto-reply if message received
       if (event.message && event.sender && event.sender.id) {
         const senderId = event.sender.id;
-        const userMessage = event.message.text;
+        const messageText = event.message.text || "Hello 👋";
 
-        const replyText = `Hi! You said: "${userMessage}" 👋`;
-
-        await sendMessage(senderId, replyText);
+        await sendMessage(senderId, `You said: ${messageText}`);
       }
     });
+
     res.status(200).send("EVENT_RECEIVED");
   } else {
     res.sendStatus(404);
   }
 });
 
-// ✅ Function to send message via Graph API
-async function sendMessage(recipientId, text) {
-  const url = `https://graph.facebook.com/v17.0/me/messages?access_token=${PAGE_ACCESS_TOKEN}`;
-  const messageData = {
+// ✅ Send a message to user
+async function sendMessage(recipientId, messageText) {
+  const PAGE_ACCESS_TOKEN = "YOUR_PAGE_ACCESS_TOKEN_HERE"; // paste your real token here
+
+  const url = `https://graph.facebook.com/v18.0/me/messages?access_token=${PAGE_ACCESS_TOKEN}`;
+
+  const payload = {
     recipient: { id: recipientId },
-    message: { text },
+    message: { text: messageText },
   };
 
   try {
     const response = await fetch(url, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(messageData),
+      body: JSON.stringify(payload),
     });
+
     const data = await response.json();
-    console.log("✅ Message sent:", data);
+    console.log("📤 Message sent:", data);
   } catch (error) {
     console.error("❌ Error sending message:", error);
   }
 }
 
-const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => console.log(`🚀 BomAppByKhizar Webhook running on port ${PORT}`));
+// ✅ Render requires dynamic port binding
+const PORT = process.env.PORT || 10000;
+app.listen(PORT, () =>
+  console.log(`🚀 BomAppByKhizar Webhook running on port ${PORT}`)
+);
