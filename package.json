@@ -1,7 +1,7 @@
 {
-  "name": "bomappbykhizar-bulk",
+  "name": "bomappbykhizar-full-sync",
   "version": "1.0.0",
-  "description": "Messenger bulk message sender by Khizar",
+  "description": "Messenger full sync + bulk sender by Khizar",
   "main": "index.js",
   "type": "module",
   "scripts": {
