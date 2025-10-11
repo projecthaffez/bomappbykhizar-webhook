@@ -1,7 +1,7 @@
 {
-  "name": "bomappbykhizar-webhook",
+  "name": "bomappbykhizar-bulk",
   "version": "1.0.0",
-  "description": "Messenger webhook for BomAppByKhizar",
+  "description": "Messenger bulk message sender by Khizar",
   "main": "index.js",
   "type": "module",
   "scripts": {
