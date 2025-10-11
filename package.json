@@ -1,12 +1,14 @@
 {
   "name": "bomappbykhizar-webhook",
   "version": "1.0.0",
+  "description": "Messenger webhook for BomAppByKhizar",
   "main": "index.js",
   "type": "module",
-  "dependencies": {
-    "express": "^4.18.2"
-  },
   "scripts": {
     "start": "node index.js"
+  },
+  "dependencies": {
+    "express": "^4.19.2",
+    "node-fetch": "^3.3.2"
   }
 }
