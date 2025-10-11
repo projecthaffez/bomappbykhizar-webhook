@@ -19,6 +19,7 @@ const GAMES = [
   "Juwa City", "Game Vault", "Ultra Panda", "Cash Machine",
   "Big Winner", "Game Room", "River Sweeps", "Mafia", "Yolo"
 ];
+const EMOJIS = ["🎰", "🔥", "💎", "💰", "🎮", "⭐", "⚡", "🎯", "🏆", "💫"];
 
 // ===== FILE HELPERS =====
 function readUsers() {
@@ -48,22 +49,28 @@ async function sendMessage(id, text) {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         messaging_type: "MESSAGE_TAG",
-        tag: "ACCOUNT_UPDATE", // ✅ allow outside 24h messages
+        tag: "ACCOUNT_UPDATE",
         recipient: { id },
         message: { text }
       })
     });
     const j = await res.json();
+    if (j.error && j.error.code === 100) {
+      console.log(`⚠️ Skipping invalid user ${id}`);
+      return false;
+    }
     if (j.error) console.error("FB API error:", j.error);
+    return true;
   } catch (err) {
     console.error("Send message failed:", err);
+    return false;
   }
 }
 
 // ===== FETCH FB CONVERSATIONS =====
 async function fetchAllConversations() {
   const all = [];
-  let url = `https://graph.facebook.com/v18.0/${PAGE_ID}/conversations?fields=participants.limit(100){id},updated_time&limit=100&access_token=${PAGE_ACCESS_TOKEN}`;
+  let url = `https://graph.facebook.com/v18.0/${PAGE_ID}/conversations?fields=participants.limit(100){id,name},updated_time&limit=100&access_token=${PAGE_ACCESS_TOKEN}`;
   while (url) {
     const res = await fetch(url);
     const json = await res.json();
@@ -76,18 +83,21 @@ async function fetchAllConversations() {
 
 // ===== OPENAI MESSAGE GENERATOR =====
 async function generateMessage(firstName = "Player") {
+  const randomGames = GAMES.sort(() => 0.5 - Math.random()).slice(0, 5);
+  const randomEmojis = EMOJIS.sort(() => 0.5 - Math.random()).slice(0, 3).join(" ");
+  const urgency = ["Tonight only", "Don’t miss out", "Ends soon", "Hurry up", "Limited time"][Math.floor(Math.random() * 5)];
+
   const prompt = `
-You are a professional gaming marketer writing short Facebook Messenger re-engagement promos.
+Create a short, energetic and friendly Facebook Messenger casino promo (under 35 words).
 
 Rules:
-- Always greet player by name, e.g. "Hi ${firstName} 👋"
-- ALWAYS mention 4–5 random games from this list:
-${GAMES.join(", ")}
-- Include this exact bonus line: "${BONUS_LINE}"
-- Add urgency ("Ends soon", "Tonight only")
-- End with: "message us to unlock your bonus and see payment options 💳"
-- Keep under 30 words
-- No URLs, deposit words, or payment tags.
+- Greet the user by name: Hi ${firstName} 👋
+- Mention these games: ${randomGames.join(", ")}
+- Include this bonus line: "${BONUS_LINE}"
+- Add excitement and urgency: "${urgency}"
+- Use emojis naturally like ${randomEmojis}
+- End with: "Message us to unlock your bonus and see payment options 💳"
+Tone: human, exciting, engaging, casino-themed.
 `;
 
   try {
@@ -98,21 +108,21 @@ ${GAMES.join(", ")}
         "Authorization": `Bearer ${OPENAI_API_KEY}`
       },
       body: JSON.stringify({
-        model: "gpt-4o-mini",
+        model: "gpt-4o",
         messages: [{ role: "user", content: prompt }],
         max_tokens: 80,
-        temperature: 0.9
+        temperature: 1
       })
     });
 
     const data = await res.json();
     return (
       data?.choices?.[0]?.message?.content?.trim() ||
-      `Hi ${firstName} 👋 ${BONUS_LINE} — message us to unlock your bonus and see payment options 💳`
+      `Hi ${firstName} 👋 ${BONUS_LINE} ${randomEmojis} Message us to unlock your bonus 💳`
     );
   } catch (err) {
     console.error("OpenAI error:", err);
-    return `Hi ${firstName} 👋 ${BONUS_LINE} — message us to unlock your bonus 💳`;
+    return `Hi ${firstName} 👋 ${BONUS_LINE} ${randomEmojis} Message us to unlock 💳`;
   }
 }
 
@@ -127,12 +137,14 @@ async function syncUsers() {
     const participant = c.participants?.data?.find(p => p.id !== PAGE_ID);
     if (!participant) continue;
     const uid = participant.id;
+    const name = participant.name || "Player";
     const existing = userMap.get(uid);
     if (existing) {
       if (!existing.lastActive || updated > existing.lastActive)
         existing.lastActive = updated;
+      existing.name = name;
     } else {
-      userMap.set(uid, { id: uid, lastActive: updated, lastSent: 0 });
+      userMap.set(uid, { id: uid, name, lastActive: updated, lastSent: 0 });
     }
   }
 
@@ -149,19 +161,22 @@ app.post("/auto-promo", async (req, res) => {
   console.log("📡 /auto-promo triggered");
   try {
     const users = await syncUsers();
-    let sent = 0;
+    let sent = 0, skipped = 0;
 
     for (const u of users) {
-      const msg = await generateMessage();
-      await sendMessage(u.id, msg);
-      u.lastSent = Date.now();
-      sent++;
-      await new Promise(r => setTimeout(r, 300));
+      const msg = await generateMessage(u.name?.split(" ")[0] || "Player");
+      console.log(`📩 Promo for ${u.name || u.id}: ${msg}`);
+      const success = await sendMessage(u.id, msg);
+      if (success) {
+        u.lastSent = Date.now();
+        sent++;
+      } else skipped++;
+      await new Promise(r => setTimeout(r, 400));
     }
 
     writeUsers(users);
-    console.log(`✅ Sent ${sent} messages`);
-    res.json({ sent, total: users.length });
+    console.log(`✅ Sent ${sent} | ⚠️ Skipped ${skipped}`);
+    res.json({ sent, skipped, total: users.length });
   } catch (err) {
     console.error("❌ Error in auto-promo:", err);
     res.status(500).json({ error: err.message });
@@ -170,10 +185,10 @@ app.post("/auto-promo", async (req, res) => {
 
 // ===== HEALTH CHECK =====
 app.get("/", (req, res) =>
-  res.send("BomAppByKhizar AI Auto Promo v4.3.1 Pro Edition ✅ Running Smoothly")
+  res.send("BomAppByKhizar AI Auto Promo v4.3.2 Dynamic Edition ✅ Running Smoothly")
 );
 
 const PORT = process.env.PORT || 10000;
 app.listen(PORT, () =>
-  console.log(`🚀 BomAppByKhizar v4.3.1 running on port ${PORT}`)
+  console.log(`🚀 BomAppByKhizar v4.3.2 running on port ${PORT}`)
 );
