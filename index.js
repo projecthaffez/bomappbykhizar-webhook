@@ -12,7 +12,7 @@ const SECRET = process.env.SEND_SECRET || "khizarBulkKey123";
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
 const USERS_FILE = "users.json";
 
-// ===== SETTINGS =====
+// ===== CONSTANTS =====
 const BONUS_LINE = "Signup Bonus 150%-200% | Regular Bonus 80%-100%";
 const GAMES = [
   "Vblink", "Orion Stars", "Fire Kirin", "Milky Way", "Panda Master",
@@ -39,14 +39,19 @@ function writeUsers(users) {
   }
 }
 
-// ===== FACEBOOK API HELPERS =====
+// ===== FACEBOOK API HELPER =====
 async function sendMessage(id, text) {
   const url = `https://graph.facebook.com/v18.0/me/messages?access_token=${PAGE_ACCESS_TOKEN}`;
   try {
     const res = await fetch(url, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ recipient: { id }, message: { text } })
+      body: JSON.stringify({
+        messaging_type: "MESSAGE_TAG",
+        tag: "ACCOUNT_UPDATE", // ✅ allow outside 24h messages
+        recipient: { id },
+        message: { text }
+      })
     });
     const j = await res.json();
     if (j.error) console.error("FB API error:", j.error);
@@ -55,6 +60,7 @@ async function sendMessage(id, text) {
   }
 }
 
+// ===== FETCH FB CONVERSATIONS =====
 async function fetchAllConversations() {
   const all = [];
   let url = `https://graph.facebook.com/v18.0/${PAGE_ID}/conversations?fields=participants.limit(100){id},updated_time&limit=100&access_token=${PAGE_ACCESS_TOKEN}`;
@@ -73,16 +79,17 @@ async function generateMessage(firstName = "Player") {
   const prompt = `
 You are a professional gaming marketer writing short Facebook Messenger re-engagement promos.
 
-Include:
-- Player name (e.g. "Hi ${firstName} 👋")
-- Mention any 4–5 random games from this list:
+Rules:
+- Always greet player by name, e.g. "Hi ${firstName} 👋"
+- ALWAYS mention 4–5 random games from this list:
 ${GAMES.join(", ")}
 - Include this exact bonus line: "${BONUS_LINE}"
 - Add urgency ("Ends soon", "Tonight only")
-- End with CTA: "message us to unlock your bonus and see payment options 💳"
+- End with: "message us to unlock your bonus and see payment options 💳"
 - Keep under 30 words
-- No links, deposit terms or payment handles.
+- No URLs, deposit words, or payment tags.
 `;
+
   try {
     const res = await fetch("https://api.openai.com/v1/chat/completions", {
       method: "POST",
@@ -97,20 +104,24 @@ ${GAMES.join(", ")}
         temperature: 0.9
       })
     });
+
     const data = await res.json();
-    return data?.choices?.[0]?.message?.content?.trim()
-      || `Hi ${firstName} 👋 ${BONUS_LINE} — message us to unlock your bonus and see payment options 💳`;
+    return (
+      data?.choices?.[0]?.message?.content?.trim() ||
+      `Hi ${firstName} 👋 ${BONUS_LINE} — message us to unlock your bonus and see payment options 💳`
+    );
   } catch (err) {
     console.error("OpenAI error:", err);
     return `Hi ${firstName} 👋 ${BONUS_LINE} — message us to unlock your bonus 💳`;
   }
 }
 
-// ===== SYNC USERS =====
+// ===== USER SYNC =====
 async function syncUsers() {
   const users = readUsers();
   const userMap = new Map(users.map(u => [u.id, u]));
   const convos = await fetchAllConversations();
+
   for (const c of convos) {
     const updated = new Date(c.updated_time).getTime();
     const participant = c.participants?.data?.find(p => p.id !== PAGE_ID);
@@ -118,17 +129,19 @@ async function syncUsers() {
     const uid = participant.id;
     const existing = userMap.get(uid);
     if (existing) {
-      if (!existing.lastActive || updated > existing.lastActive) existing.lastActive = updated;
+      if (!existing.lastActive || updated > existing.lastActive)
+        existing.lastActive = updated;
     } else {
       userMap.set(uid, { id: uid, lastActive: updated, lastSent: 0 });
     }
   }
+
   const merged = Array.from(userMap.values());
   writeUsers(merged);
   return merged;
 }
 
-// ===== MAIN ROUTE =====
+// ===== AUTO PROMO ENDPOINT =====
 app.post("/auto-promo", async (req, res) => {
   if (req.body.secret !== SECRET)
     return res.status(401).json({ error: "Unauthorized" });
@@ -137,13 +150,15 @@ app.post("/auto-promo", async (req, res) => {
   try {
     const users = await syncUsers();
     let sent = 0;
+
     for (const u of users) {
       const msg = await generateMessage();
       await sendMessage(u.id, msg);
       u.lastSent = Date.now();
       sent++;
-      await new Promise(r => setTimeout(r, 200));
+      await new Promise(r => setTimeout(r, 300));
     }
+
     writeUsers(users);
     console.log(`✅ Sent ${sent} messages`);
     res.json({ sent, total: users.length });
@@ -153,8 +168,12 @@ app.post("/auto-promo", async (req, res) => {
   }
 });
 
-// ===== HEALTH ROUTE =====
-app.get("/", (req, res) => res.send("BomAppByKhizar AI Auto Promo v4.3 Pro Edition running fine ✅"));
+// ===== HEALTH CHECK =====
+app.get("/", (req, res) =>
+  res.send("BomAppByKhizar AI Auto Promo v4.3.1 Pro Edition ✅ Running Smoothly")
+);
 
 const PORT = process.env.PORT || 10000;
-app.listen(PORT, () => console.log(`🚀 BomAppByKhizar v4.3 running on port ${PORT}`));
+app.listen(PORT, () =>
+  console.log(`🚀 BomAppByKhizar v4.3.1 running on port ${PORT}`)
+);
