@@ -13,10 +13,12 @@ const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
 const USERS_FILE = "users.json";
 
 // ===== SETTINGS =====
-const ACTIVE_WINDOW_HOURS = 24;
-const INSTANT_COOLDOWN_HOURS = 2;
-const FALLBACK_COOLDOWN_HOURS = 6;
-const FALLBACK_HOURS = [8, 16, 0]; // 8 AM, 4 PM, 12 AM
+const BONUS_LINE = "Signup Bonus 150%-200% | Regular Bonus 80%-100%";
+const GAMES = [
+  "Vblink", "Orion Stars", "Fire Kirin", "Milky Way", "Panda Master",
+  "Juwa City", "Game Vault", "Ultra Panda", "Cash Machine",
+  "Big Winner", "Game Room", "River Sweeps", "Mafia", "Yolo"
+];
 
 // ===== FILE HELPERS =====
 function readUsers() {
@@ -29,7 +31,6 @@ function readUsers() {
   }
   return [];
 }
-
 function writeUsers(users) {
   try {
     fs.writeFileSync(USERS_FILE, JSON.stringify(users, null, 2));
@@ -38,38 +39,7 @@ function writeUsers(users) {
   }
 }
 
-// ===== OPENAI PROMO GENERATOR =====
-async function generateAIPromo(firstName) {
-  if (!OPENAI_API_KEY) return `Hi ${firstName} 👋 Claim your bonus now!`;
-  const prompt = `You are an expert short-campaign copywriter for online games and casinos.
-Create one friendly, urgent, 1-sentence promo (max 25 words) including a bonus % (e.g. 150%, 200%) and name personalization.`;
-  try {
-    const res = await fetch("https://api.openai.com/v1/chat/completions", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "Authorization": `Bearer ${OPENAI_API_KEY}`
-      },
-      body: JSON.stringify({
-        model: "gpt-4o-mini",
-        messages: [
-          { role: "system", content: "You write short, fun, persuasive casino promos." },
-          { role: "user", content: `${prompt}\\nName: ${firstName}` }
-        ],
-        max_tokens: 60,
-        temperature: 0.9
-      })
-    });
-    const data = await res.json();
-    const text = data?.choices?.[0]?.message?.content;
-    return text?.trim() || `Hi ${firstName} 👋 Claim your bonus now!`;
-  } catch (err) {
-    console.error("OpenAI error:", err);
-    return `Hi ${firstName} 👋 Claim your bonus now!`;
-  }
-}
-
-// ===== FACEBOOK SEND MESSAGE =====
+// ===== FACEBOOK API HELPERS =====
 async function sendMessage(id, text) {
   const url = `https://graph.facebook.com/v18.0/me/messages?access_token=${PAGE_ACCESS_TOKEN}`;
   try {
@@ -85,7 +55,6 @@ async function sendMessage(id, text) {
   }
 }
 
-// ===== FETCH ALL CONVERSATIONS (PAGINATION) =====
 async function fetchAllConversations() {
   const all = [];
   let url = `https://graph.facebook.com/v18.0/${PAGE_ID}/conversations?fields=participants.limit(100){id},updated_time&limit=100&access_token=${PAGE_ACCESS_TOKEN}`;
@@ -99,97 +68,93 @@ async function fetchAllConversations() {
   return all;
 }
 
-// ===== GET FIRST NAME (CACHE) =====
-const nameCache = {};
-async function getFirstName(id) {
-  if (nameCache[id]) return nameCache[id];
+// ===== OPENAI MESSAGE GENERATOR =====
+async function generateMessage(firstName = "Player") {
+  const prompt = `
+You are a professional gaming marketer writing short Facebook Messenger re-engagement promos.
+
+Include:
+- Player name (e.g. "Hi ${firstName} 👋")
+- Mention any 4–5 random games from this list:
+${GAMES.join(", ")}
+- Include this exact bonus line: "${BONUS_LINE}"
+- Add urgency ("Ends soon", "Tonight only")
+- End with CTA: "message us to unlock your bonus and see payment options 💳"
+- Keep under 30 words
+- No links, deposit terms or payment handles.
+`;
   try {
-    const res = await fetch(`https://graph.facebook.com/v18.0/${id}?fields=first_name&access_token=${PAGE_ACCESS_TOKEN}`);
-    const d = await res.json();
-    const name = d.first_name || "Player";
-    nameCache[id] = name;
-    return name;
-  } catch {
-    return "Player";
+    const res = await fetch("https://api.openai.com/v1/chat/completions", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "Authorization": `Bearer ${OPENAI_API_KEY}`
+      },
+      body: JSON.stringify({
+        model: "gpt-4o-mini",
+        messages: [{ role: "user", content: prompt }],
+        max_tokens: 80,
+        temperature: 0.9
+      })
+    });
+    const data = await res.json();
+    return data?.choices?.[0]?.message?.content?.trim()
+      || `Hi ${firstName} 👋 ${BONUS_LINE} — message us to unlock your bonus and see payment options 💳`;
+  } catch (err) {
+    console.error("OpenAI error:", err);
+    return `Hi ${firstName} 👋 ${BONUS_LINE} — message us to unlock your bonus 💳`;
   }
 }
 
-// ===== MAIN AUTO-PROMO ROUTE =====
+// ===== SYNC USERS =====
+async function syncUsers() {
+  const users = readUsers();
+  const userMap = new Map(users.map(u => [u.id, u]));
+  const convos = await fetchAllConversations();
+  for (const c of convos) {
+    const updated = new Date(c.updated_time).getTime();
+    const participant = c.participants?.data?.find(p => p.id !== PAGE_ID);
+    if (!participant) continue;
+    const uid = participant.id;
+    const existing = userMap.get(uid);
+    if (existing) {
+      if (!existing.lastActive || updated > existing.lastActive) existing.lastActive = updated;
+    } else {
+      userMap.set(uid, { id: uid, lastActive: updated, lastSent: 0 });
+    }
+  }
+  const merged = Array.from(userMap.values());
+  writeUsers(merged);
+  return merged;
+}
+
+// ===== MAIN ROUTE =====
 app.post("/auto-promo", async (req, res) => {
-  if (req.body.secret !== SECRET) return res.status(401).json({ error: "Unauthorized" });
-  console.log("\\n📡 /auto-promo triggered");
+  if (req.body.secret !== SECRET)
+    return res.status(401).json({ error: "Unauthorized" });
 
+  console.log("📡 /auto-promo triggered");
   try {
-    const now = Date.now();
-    const activeWindow = ACTIVE_WINDOW_HOURS * 3600000;
-    let users = readUsers();
-
-    // Map for quick lookup
-    const userMap = new Map(users.map(u => [u.id, u]));
-
-    // Merge all conversations
-    const convos = await fetchAllConversations();
-    for (const c of convos) {
-      const updated = new Date(c.updated_time).getTime();
-      const participant = c.participants?.data?.find(p => p.id !== PAGE_ID);
-      if (!participant) continue;
-      const uid = participant.id;
-      const existing = userMap.get(uid);
-      if (existing) {
-        if (!existing.lastActive || updated > existing.lastActive) existing.lastActive = updated;
-      } else {
-        userMap.set(uid, { id: uid, lastSent: 0, lastActive: updated });
-      }
-    }
-    users = Array.from(userMap.values());
-
-    // Determine active users
-    const activeUsers = users.filter(u => now - (u.lastActive || 0) <= activeWindow);
+    const users = await syncUsers();
     let sent = 0;
-
-    // 1️⃣ Instant promos
-    for (const u of activeUsers) {
-      if ((now - (u.lastSent || 0)) / 3600000 >= INSTANT_COOLDOWN_HOURS) {
-        const name = await getFirstName(u.id);
-        const msg = await generateAIPromo(name);
-        await sendMessage(u.id, msg);
-        u.lastSent = now;
-        sent++;
-        console.log(`📤 Sent instant promo → ${name}`);
-        await new Promise(r => setTimeout(r, 200));
-      }
+    for (const u of users) {
+      const msg = await generateMessage();
+      await sendMessage(u.id, msg);
+      u.lastSent = Date.now();
+      sent++;
+      await new Promise(r => setTimeout(r, 200));
     }
-
-    // 2️⃣ Fallback promos
-    const hr = new Date().getHours();
-    if (FALLBACK_HOURS.includes(hr)) {
-      console.log("🌙 Fallback window active — sending to inactive players");
-      for (const u of users) {
-        const isActive = now - (u.lastActive || 0) <= activeWindow;
-        if (isActive) continue;
-        if ((now - (u.lastSent || 0)) / 3600000 >= FALLBACK_COOLDOWN_HOURS) {
-          const name = await getFirstName(u.id);
-          const msg = await generateAIPromo(name);
-          await sendMessage(u.id, msg);
-          u.lastSent = now;
-          sent++;
-          console.log(`📤 Sent fallback promo → ${name}`);
-          await new Promise(r => setTimeout(r, 150));
-        }
-      }
-    }
-
     writeUsers(users);
-    console.log(`✅ Auto-promo complete — sent:${sent}, active:${activeUsers.length}`);
-    res.json({ sent, active: activeUsers.length });
+    console.log(`✅ Sent ${sent} messages`);
+    res.json({ sent, total: users.length });
   } catch (err) {
-    console.error("❌ Error in /auto-promo:", err);
+    console.error("❌ Error in auto-promo:", err);
     res.status(500).json({ error: err.message });
   }
 });
 
-// ===== HEALTH CHECK =====
-app.get("/", (req, res) => res.send("BomAppByKhizar AI Auto Promo v4.1 running fine ✅"));
+// ===== HEALTH ROUTE =====
+app.get("/", (req, res) => res.send("BomAppByKhizar AI Auto Promo v4.3 Pro Edition running fine ✅"));
 
 const PORT = process.env.PORT || 10000;
-app.listen(PORT, () => console.log(`🚀 BomAppByKhizar AI Auto Promo v4.1 running on port ${PORT}`));
+app.listen(PORT, () => console.log(`🚀 BomAppByKhizar v4.3 running on port ${PORT}`));
