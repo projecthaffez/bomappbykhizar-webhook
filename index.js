@@ -4,13 +4,13 @@ app.use(express.json());
 
 // ✅ Facebook verification
 app.get("/webhook", (req, res) => {
-  const VERIFY_TOKEN = "bomappbykhizar123"; // choose your verify token
+  const VERIFY_TOKEN = "bomappbykhizar123"; // same as your Render environment variable if set
   const mode = req.query["hub.mode"];
   const token = req.query["hub.verify_token"];
   const challenge = req.query["hub.challenge"];
 
   if (mode && token === VERIFY_TOKEN) {
-    console.log("Webhook verified successfully ✅");
+    console.log("✅ Webhook verified successfully");
     res.status(200).send(challenge);
   } else {
     res.sendStatus(403);
@@ -31,4 +31,6 @@ app.post("/webhook", (req, res) => {
   }
 });
 
-app.listen(3000, () => console.log("🚀 BomAppByKhizar Webhook running on port 3000"));
+// ✅ Dynamic port for Render
+const PORT = process.env.PORT || 3000;
+app.listen(PORT, () => console.log(`🚀 BomAppByKhizar Webhook running on port ${PORT}`));
