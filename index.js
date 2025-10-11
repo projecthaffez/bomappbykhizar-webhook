@@ -1,12 +1,14 @@
 import express from "express";
-import fetch from "node-fetch"; // ✅ use node-fetch v3
+import fetch from "node-fetch";
 
 const app = express();
 app.use(express.json());
 
-// ✅ Facebook verification endpoint
+// ✅ Your verify token (must match the one in Meta Developer dashboard)
+const VERIFY_TOKEN = "bomappbykhizar123";
+
+// ✅ Webhook verification endpoint
 app.get("/webhook", (req, res) => {
-  const VERIFY_TOKEN = "bomappbykhizar123"; // same token you used in Meta dashboard
   const mode = req.query["hub.mode"];
   const token = req.query["hub.verify_token"];
   const challenge = req.query["hub.challenge"];
@@ -19,7 +21,7 @@ app.get("/webhook", (req, res) => {
   }
 });
 
-// ✅ Handle incoming messages
+// ✅ Handle incoming webhook events
 app.post("/webhook", async (req, res) => {
   const body = req.body;
 
@@ -28,12 +30,13 @@ app.post("/webhook", async (req, res) => {
       const event = entry.messaging[0];
       console.log("📩 New event:", event);
 
-      // Example: Auto-reply if message received
+      // If a message is received, send a reply
       if (event.message && event.sender && event.sender.id) {
         const senderId = event.sender.id;
-        const messageText = event.message.text || "Hello 👋";
+        const userMessage = event.message.text || "👋 Hello!";
+        const replyText = `You said: "${userMessage}" 😊`;
 
-        await sendMessage(senderId, `You said: ${messageText}`);
+        await sendMessage(senderId, replyText);
       }
     });
 
@@ -43,10 +46,9 @@ app.post("/webhook", async (req, res) => {
   }
 });
 
-// ✅ Send a message to user
+// ✅ Function to send a message back to user
 async function sendMessage(recipientId, messageText) {
-  const PAGE_ACCESS_TOKEN = "YOUR_PAGE_ACCESS_TOKEN_HERE"; // paste your real token here
-
+  const PAGE_ACCESS_TOKEN = process.env.PAGE_ACCESS_TOKEN; // ✅ token stored in Render Environment
   const url = `https://graph.facebook.com/v18.0/me/messages?access_token=${PAGE_ACCESS_TOKEN}`;
 
   const payload = {
@@ -62,14 +64,17 @@ async function sendMessage(recipientId, messageText) {
     });
 
     const data = await response.json();
-    console.log("📤 Message sent:", data);
+
+    if (data.error) {
+      console.error("❌ Error from Meta API:", data.error);
+    } else {
+      console.log("📤 Message sent successfully:", data);
+    }
   } catch (error) {
     console.error("❌ Error sending message:", error);
   }
 }
 
-// ✅ Render requires dynamic port binding
+// ✅ Dynamic port for Render
 const PORT = process.env.PORT || 10000;
-app.listen(PORT, () =>
-  console.log(`🚀 BomAppByKhizar Webhook running on port ${PORT}`)
-);
+app.listen(PORT, () => console.log(`🚀 BomAppByKhizar Webhook running on port ${PORT}`));
