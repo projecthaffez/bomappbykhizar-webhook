@@ -176,7 +176,14 @@ app.post("/auto-promo", async (req, res) => {
 
     writeUsers(users);
     console.log(`✅ Sent ${sent} | ⚠️ Skipped ${skipped}`);
-    res.json({ sent, skipped, total: users.length });
+    res.json({
+  status: "✅ Promo run completed successfully",
+  sent,
+  skipped,
+  total: users.length,
+  message: "AI promo executed — shortened response for cron-job.org compatibility."
+});
+
   } catch (err) {
     console.error("❌ Error in auto-promo:", err);
     res.status(500).json({ error: err.message });
