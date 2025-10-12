@@ -1,6 +1,7 @@
 import express from "express";
 import fetch from "node-fetch";
 import fs from "fs";
+import { exec } from "child_process"; // ✅ Added for auto-online-promo
 
 const app = express();
 app.use(express.json());
@@ -32,6 +33,7 @@ function readUsers() {
   }
   return [];
 }
+
 function writeUsers(users) {
   try {
     fs.writeFileSync(USERS_FILE, JSON.stringify(users, null, 2));
@@ -213,13 +215,30 @@ app.post("/auto-promo", async (req, res) => {
   }
 });
 
+// ===== AUTO ONLINE PROMO ROUTE =====
+app.post("/auto-online-promo", (req, res) => {
+  const { secret } = req.body;
+  if (secret !== "khizarBulkKey123")
+    return res.status(401).json({ error: "Unauthorized" });
+
+  console.log("📡 /auto-online-promo triggered externally");
+  exec("node autoOnlinePromo.js", (error, stdout, stderr) => {
+    if (error) {
+      console.error(`❌ Exec error: ${error}`);
+      return res.status(500).json({ error: error.message });
+    }
+    console.log(stdout);
+    res.json({ status: "✅ AutoOnlinePromo executed successfully" });
+  });
+});
+
 // ===== HEALTH CHECK =====
 app.get("/", (req, res) =>
-  res.send("BomAppByKhizar AI Auto Promo v4.3.3 — Stable Sync Edition ✅ Running Smoothly")
+  res.send("BomAppByKhizar AI Auto Promo v4.3.4 — Online Promo Enabled ✅ Running Smoothly")
 );
 
 // ===== START SERVER =====
 const PORT = process.env.PORT || 10000;
 app.listen(PORT, () =>
-  console.log(`🚀 BomAppByKhizar v4.3.3 running on port ${PORT}`)
+  console.log(`🚀 BomAppByKhizar v4.3.4 running on port ${PORT}`)
 );
