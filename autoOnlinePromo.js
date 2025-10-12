@@ -15,7 +15,6 @@ const GAMES = [
   "Big Winner", "Game Room", "River Sweeps", "Mafia", "Yolo"
 ];
 const EMOJIS = ["🎰", "🔥", "💎", "💰", "🎮", "⭐", "⚡", "🎯", "🏆", "💫"];
-const PAGE_USERNAME = "JackpotGenius"; // 👈 replace this once with your real page username
 
 // ===== FILE HELPERS =====
 function readUsers() {
@@ -36,8 +35,8 @@ function writeUsers(users) {
   }
 }
 
-// ===== FACEBOOK MESSAGE SENDER (with re-engagement fallback) =====
-async function sendMessage(id, text, firstName) {
+// ===== FACEBOOK MESSAGE SENDER =====
+async function sendMessage(id, text) {
   const url = `https://graph.facebook.com/v18.0/me/messages?access_token=${PAGE_ACCESS_TOKEN}`;
   try {
     const res = await fetch(url, {
@@ -45,33 +44,16 @@ async function sendMessage(id, text, firstName) {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         messaging_type: "MESSAGE_TAG",
-        tag: "EVENT_REMINDER",
+        tag: "EVENT_REMINDER", // ✅ Safe for re-engagement promos
         recipient: { id },
         message: { text }
       })
     });
     const j = await res.json();
-
-    // ===== Re-engagement fallback =====
-    if (j.error && (j.error.code === 100 || j.error.error_subcode === 2018278)) {
-      console.log(`⚠️ ${firstName} is outside 24h window — sending re-engagement link`);
-      const reEngageText = `Hey ${firstName} 👋 We’ve got fresh bonuses waiting 🎰🔥 
-Click below to reopen your chat & claim your rewards 👇 
-https://m.me/${PAGE_USERNAME}?ref=reengage`;
-
-      await fetch(url, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          messaging_type: "RESPONSE",
-          recipient: { id },
-          message: { text: reEngageText }
-        })
-      });
-
+    if (j.error && j.error.code === 100) {
+      console.log(`⚠️ Skipping invalid user ${id}`);
       return false;
     }
-
     if (j.error) console.error("FB API error:", j.error);
     return true;
   } catch (err) {
@@ -87,11 +69,11 @@ async function generateMessage(firstName = "Player") {
   const urgency = ["Tonight only", "Don’t miss out", "Ends soon", "Hurry up", "Limited time"][Math.floor(Math.random() * 5)];
 
   const prompt = `
-Create a short, exciting casino promo under 35 words:
+Create a short, exciting casino promo (under 35 words).
 - Start: Hi ${firstName} 👋
-- Games: ${randomGames.join(", ")}
-- Bonus: ${BONUS_LINE}
-- Urgency: ${urgency}
+- Mention: ${randomGames.join(", ")}
+- Include bonus info: "${BONUS_LINE}"
+- Add urgency: "${urgency}"
 - Emojis: ${randomEmojis}
 - End: "Message us to unlock your bonus 💳"
 `;
@@ -170,7 +152,7 @@ async function autoOnlinePromo() {
   }
 
   const now = Date.now();
-  const recentlyActive = users.filter(u => now - u.lastActive <= 60 * 60 * 1000); // active within 1 hour
+  const recentlyActive = users.filter(u => now - u.lastActive <= 60 * 60 * 1000); // Active within 1 hour
   if (!recentlyActive.length) {
     console.log("⚠️ No recently active users found");
     return;
@@ -179,11 +161,18 @@ async function autoOnlinePromo() {
   const selectedUsers = recentlyActive.slice(0, 182);
   console.log(`🎯 Found ${recentlyActive.length} eligible users | Sending to: ${selectedUsers.length}`);
 
-  let sent = 0;
+  let sent = 0, skipped = 0;
   for (const u of selectedUsers) {
+    // ✅ skip if promo sent in last 30 mins (cooldown)
+    if (u.lastSent && (now - u.lastSent < 30 * 60 * 1000)) {
+      console.log(`⏸️ Skipping ${u.name} — last promo sent recently`);
+      skipped++;
+      continue;
+    }
+
     const msg = await generateMessage(u.name?.split(" ")[0] || "Player");
     console.log(`📩 Sending to ${u.name || u.id}: ${msg}`);
-    const success = await sendMessage(u.id, msg, u.name?.split(" ")[0] || "Player");
+    const success = await sendMessage(u.id, msg);
     if (success) {
       u.lastSent = Date.now();
       sent++;
@@ -192,7 +181,7 @@ async function autoOnlinePromo() {
   }
 
   writeUsers(users);
-  console.log(`✅ AutoOnlinePromo finished — Sent: ${sent} | Saved updates to users.json`);
+  console.log(`✅ AutoOnlinePromo finished — Sent: ${sent} | Skipped: ${skipped} | Saved updates to users.json`);
 }
 
 // Run when file executed directly
