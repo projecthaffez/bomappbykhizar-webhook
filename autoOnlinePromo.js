@@ -15,7 +15,7 @@ const GAMES = [
   "Big Winner", "Game Room", "River Sweeps", "Mafia", "Yolo"
 ];
 const EMOJIS = ["🎰", "🔥", "💎", "💰", "🎮", "⭐", "⚡", "🎯", "🏆", "💫"];
-const PAGE_USERNAME = "YourPageUsernameHere"; // 👈 replace this once with your real page username
+const PAGE_USERNAME = "JackpotGenius"; // 👈 replace this once with your real page username
 
 // ===== FILE HELPERS =====
 function readUsers() {
