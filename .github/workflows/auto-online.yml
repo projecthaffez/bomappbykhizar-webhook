@@ -1,0 +1,13 @@
+name: BomAppByKhizar Auto Online Promo
+on:
+  schedule:
+    - cron: "*/10 * * * *"   # every 10 minutes
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Trigger Online Promo
+        run: |
+          curl -X POST https://bomappbykhizar-webhook.onrender.com/auto-online-promo \
+          -H "Content-Type: application/json" \
+          -d '{"secret": "khizarBulkKey123"}'
