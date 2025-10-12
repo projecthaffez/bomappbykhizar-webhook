@@ -1,0 +1,21 @@
+name: BomAppByKhizar Auto Sync
+
+on:
+  workflow_dispatch:        # allows manual run from Actions UI
+  schedule:
+    - cron: '0 18 * * *'    # runs daily at 11 PM Pakistan Time (18:00 UTC)
+
+jobs:
+  call-sync:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Trigger /sync-users
+        env:
+          WEBHOOK_URL: ${{ secrets.WEBHOOK_URL }}
+          SYNC_SECRET: ${{ secrets.SYNC_SECRET }}
+        run: |
+          echo "Calling sync endpoint..."
+          curl -s -X POST "$WEBHOOK_URL" \
+            -H "Content-Type: application/json" \
+            -d "{\"secret\":\"$SYNC_SECRET\"}" \
+            --max-time 300
