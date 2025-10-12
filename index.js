@@ -1,7 +1,8 @@
 import express from "express";
 import fetch from "node-fetch";
 import fs from "fs";
-
+// Simple global flag to prevent double runs
+let isPromoRunning = false;
 const app = express();
 app.use(express.json());
 
