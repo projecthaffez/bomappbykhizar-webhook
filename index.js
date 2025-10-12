@@ -195,6 +195,29 @@ app.post("/auto-promo", async (req, res) => {
 app.get("/", (req, res) =>
   res.send("BomAppByKhizar AI Auto Promo v4.3.2 Dynamic Edition ✅ Running Smoothly")
 );
+app.post("/sync-users", async (req, res) => {
+  try {
+    console.log("📡 /sync-users triggered at", new Date().toLocaleString("en-US", { timeZone: "Asia/Karachi" }));
+    console.log("🧾 Request body:", req.body);
+
+    const { secret } = req.body;
+    if (secret !== "khizarBulkKey123") {
+      console.log("🚫 Unauthorized request — invalid secret");
+      return res.status(403).json({ error: "Unauthorized" });
+    }
+
+    // ✅ Dummy successful response (no real sync)
+    res.json({
+      status: "✅ Sync Complete (Test Mode)",
+      added: 0,
+      total: 0
+    });
+
+  } catch (error) {
+    console.error("❌ Sync failed:", error);
+    res.status(500).json({ error: "Sync failed", details: error.message });
+  }
+});
 
 const PORT = process.env.PORT || 10000;
 app.listen(PORT, () =>
