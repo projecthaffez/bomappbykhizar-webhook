@@ -1,8 +1,7 @@
 import express from "express";
 import fetch from "node-fetch";
 import fs from "fs";
-// Simple global flag to prevent double runs
-let isPromoRunning = false;
+
 const app = express();
 app.use(express.json());
 
@@ -41,7 +40,7 @@ function writeUsers(users) {
   }
 }
 
-// ===== FACEBOOK API HELPER =====
+// ===== FACEBOOK MESSAGE SENDER =====
 async function sendMessage(id, text) {
   const url = `https://graph.facebook.com/v18.0/me/messages?access_token=${PAGE_ACCESS_TOKEN}`;
   try {
@@ -82,23 +81,22 @@ async function fetchAllConversations() {
   return all;
 }
 
-// ===== OPENAI MESSAGE GENERATOR =====
+// ===== AI PROMO MESSAGE =====
 async function generateMessage(firstName = "Player") {
   const randomGames = GAMES.sort(() => 0.5 - Math.random()).slice(0, 5);
   const randomEmojis = EMOJIS.sort(() => 0.5 - Math.random()).slice(0, 3).join(" ");
   const urgency = ["Tonight only", "Don’t miss out", "Ends soon", "Hurry up", "Limited time"][Math.floor(Math.random() * 5)];
 
   const prompt = `
-Create a short, energetic and friendly Facebook Messenger casino promo (under 35 words).
+Create a short, energetic Facebook casino promo message under 35 words.
 
 Rules:
-- Greet the user by name: Hi ${firstName} 👋
-- Mention these games: ${randomGames.join(", ")}
-- Include this bonus line: "${BONUS_LINE}"
-- Add excitement and urgency: "${urgency}"
-- Use emojis naturally like ${randomEmojis}
+- Greet by name: Hi ${firstName} 👋
+- Mention games: ${randomGames.join(", ")}
+- Include: "${BONUS_LINE}"
+- Add urgency: "${urgency}"
 - End with: "Message us to unlock your bonus and see payment options 💳"
-Tone: human, exciting, engaging, casino-themed.
+Tone: human, engaging, casino-style, using emojis like ${randomEmojis}.
 `;
 
   try {
@@ -115,7 +113,6 @@ Tone: human, exciting, engaging, casino-themed.
         temperature: 1
       })
     });
-
     const data = await res.json();
     return (
       data?.choices?.[0]?.message?.content?.trim() ||
@@ -127,12 +124,14 @@ Tone: human, exciting, engaging, casino-themed.
   }
 }
 
-// ===== USER SYNC =====
+// ===== SYNC USERS =====
 async function syncUsers() {
+  console.log("📡 Sync started...");
   const users = readUsers();
   const userMap = new Map(users.map(u => [u.id, u]));
   const convos = await fetchAllConversations();
 
+  let added = 0;
   for (const c of convos) {
     const updated = new Date(c.updated_time).getTime();
     const participant = c.participants?.data?.find(p => p.id !== PAGE_ID);
@@ -146,22 +145,46 @@ async function syncUsers() {
       existing.name = name;
     } else {
       userMap.set(uid, { id: uid, name, lastActive: updated, lastSent: 0 });
+      added++;
     }
   }
 
   const merged = Array.from(userMap.values());
   writeUsers(merged);
-  return merged;
+  console.log(`✅ Sync complete — added: ${added}, total: ${merged.length}`);
+  return { added, total: merged.length };
 }
 
-// ===== AUTO PROMO ENDPOINT =====
+// ===== /SYNC-USERS ENDPOINT =====
+app.post("/sync-users", async (req, res) => {
+  console.log("📡 /sync-users triggered at", new Date().toLocaleString("en-US", { timeZone: "Asia/Karachi" }));
+  const { secret } = req.body;
+  if (secret !== "khizarBulkKey123") {
+    console.log("🚫 Unauthorized request — invalid secret");
+    return res.status(403).json({ error: "Unauthorized" });
+  }
+
+  try {
+    const result = await syncUsers();
+    res.json({
+      status: "✅ Sync Complete",
+      added: result.added,
+      total: result.total,
+    });
+  } catch (error) {
+    console.error("❌ Sync failed:", error);
+    res.status(500).json({ error: "Sync failed", details: error.message });
+  }
+});
+
+// ===== AUTO PROMO =====
 app.post("/auto-promo", async (req, res) => {
   if (req.body.secret !== SECRET)
     return res.status(401).json({ error: "Unauthorized" });
 
   console.log("📡 /auto-promo triggered");
   try {
-    const users = await syncUsers();
+    const users = readUsers();
     let sent = 0, skipped = 0;
 
     for (const u of users) {
@@ -178,12 +201,11 @@ app.post("/auto-promo", async (req, res) => {
     writeUsers(users);
     console.log(`✅ Sent ${sent} | ⚠️ Skipped ${skipped}`);
     res.json({
-  status: "✅ Promo run completed successfully",
-  sent,
-  skipped,
-  total: users.length,
-  message: "AI promo executed — shortened response for cron-job.org compatibility."
-});
+      status: "✅ Promo run completed successfully",
+      sent,
+      skipped,
+      total: users.length
+    });
 
   } catch (err) {
     console.error("❌ Error in auto-promo:", err);
@@ -193,33 +215,11 @@ app.post("/auto-promo", async (req, res) => {
 
 // ===== HEALTH CHECK =====
 app.get("/", (req, res) =>
-  res.send("BomAppByKhizar AI Auto Promo v4.3.2 Dynamic Edition ✅ Running Smoothly")
+  res.send("BomAppByKhizar AI Auto Promo v4.3.3 — Stable Sync Edition ✅ Running Smoothly")
 );
-app.post("/sync-users", async (req, res) => {
-  try {
-    console.log("📡 /sync-users triggered at", new Date().toLocaleString("en-US", { timeZone: "Asia/Karachi" }));
-    console.log("🧾 Request body:", req.body);
 
-    const { secret } = req.body;
-    if (secret !== "khizarBulkKey123") {
-      console.log("🚫 Unauthorized request — invalid secret");
-      return res.status(403).json({ error: "Unauthorized" });
-    }
-
-    // ✅ Dummy successful response (no real sync)
-    res.json({
-      status: "✅ Sync Complete (Test Mode)",
-      added: 0,
-      total: 0
-    });
-
-  } catch (error) {
-    console.error("❌ Sync failed:", error);
-    res.status(500).json({ error: "Sync failed", details: error.message });
-  }
-});
-
+// ===== START SERVER =====
 const PORT = process.env.PORT || 10000;
 app.listen(PORT, () =>
-  console.log(`🚀 BomAppByKhizar v4.3.2 running on port ${PORT}`)
+  console.log(`🚀 BomAppByKhizar v4.3.3 running on port ${PORT}`)
 );
