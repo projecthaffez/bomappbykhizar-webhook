@@ -54,7 +54,7 @@ async function sendMessage(id, text) {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         messaging_type: "MESSAGE_TAG",
-        tag: "ACCOUNT_UPDATE",
+        tag: "EVENT_REMINDER", // ✅ Updated tag for promo delivery
         recipient: { id },
         message: { text }
       })
@@ -249,7 +249,7 @@ app.post("/auto-online-promo", (req, res) => {
 
 // ===== HEALTH CHECK =====
 app.get("/", (req, res) =>
-  res.send("BomAppByKhizar AI Auto Promo v4.3.4 — Duplicate Safe Edition ✅ Running Smoothly")
+  res.send("BomAppByKhizar AI Auto Promo v4.3.4 — EVENT_REMINDER Enabled ✅ Running Smoothly")
 );
 
 // ===== START SERVER =====
