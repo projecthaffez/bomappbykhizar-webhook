@@ -1,7 +1,7 @@
 import express from "express";
 import fetch from "node-fetch";
 import fs from "fs";
-import { exec } from "child_process"; // ✅ Added for auto-online-promo
+import { exec } from "child_process";
 
 const app = express();
 app.use(express.json());
@@ -12,6 +12,10 @@ const PAGE_ID = process.env.PAGE_ID;
 const SECRET = process.env.SEND_SECRET || "khizarBulkKey123";
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
 const USERS_FILE = "users.json";
+
+// ===== STATE FLAGS =====
+let isPromoRunning = false;
+let isOnlinePromoRunning = false;
 
 // ===== CONSTANTS =====
 const BONUS_LINE = "Signup Bonus 150%-200% | Regular Bonus 80%-100%";
@@ -33,7 +37,6 @@ function readUsers() {
   }
   return [];
 }
-
 function writeUsers(users) {
   try {
     fs.writeFileSync(USERS_FILE, JSON.stringify(users, null, 2));
@@ -184,7 +187,14 @@ app.post("/auto-promo", async (req, res) => {
   if (req.body.secret !== SECRET)
     return res.status(401).json({ error: "Unauthorized" });
 
+  if (isPromoRunning) {
+    console.log("⚠️ Promo already running — skipping new trigger");
+    return res.status(429).json({ error: "Promo already in progress" });
+  }
+
+  isPromoRunning = true;
   console.log("📡 /auto-promo triggered");
+
   try {
     const users = readUsers();
     let sent = 0, skipped = 0;
@@ -202,39 +212,44 @@ app.post("/auto-promo", async (req, res) => {
 
     writeUsers(users);
     console.log(`✅ Sent ${sent} | ⚠️ Skipped ${skipped}`);
-    res.json({
-      status: "✅ Promo run completed successfully",
-      sent,
-      skipped,
-      total: users.length
-    });
-
+    res.json({ status: "✅ Promo run completed successfully", sent, skipped, total: users.length });
   } catch (err) {
     console.error("❌ Error in auto-promo:", err);
     res.status(500).json({ error: err.message });
+  } finally {
+    isPromoRunning = false;
   }
 });
 
-// ===== AUTO ONLINE PROMO ROUTE =====
+// ===== AUTO ONLINE PROMO =====
 app.post("/auto-online-promo", (req, res) => {
   const { secret } = req.body;
   if (secret !== "khizarBulkKey123")
     return res.status(401).json({ error: "Unauthorized" });
 
+  if (isOnlinePromoRunning) {
+    console.log("⚠️ Online Promo already running — skipping new trigger");
+    return res.status(429).json({ error: "Online Promo already in progress" });
+  }
+
+  isOnlinePromoRunning = true;
   console.log("📡 /auto-online-promo triggered externally");
+
   exec("node autoOnlinePromo.js", (error, stdout, stderr) => {
     if (error) {
       console.error(`❌ Exec error: ${error}`);
+      isOnlinePromoRunning = false;
       return res.status(500).json({ error: error.message });
     }
     console.log(stdout);
+    isOnlinePromoRunning = false;
     res.json({ status: "✅ AutoOnlinePromo executed successfully" });
   });
 });
 
 // ===== HEALTH CHECK =====
 app.get("/", (req, res) =>
-  res.send("BomAppByKhizar AI Auto Promo v4.3.4 — Online Promo Enabled ✅ Running Smoothly")
+  res.send("BomAppByKhizar AI Auto Promo v4.3.4 — Duplicate Safe Edition ✅ Running Smoothly")
 );
 
 // ===== START SERVER =====
