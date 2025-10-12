@@ -1,10 +1,11 @@
 name: BomAppByKhizar Auto Promo Scheduler
 
 on:
+  workflow_dispatch:      # 👈 Manual Run Button enable karega
   schedule:
-    - cron: '0 0 * * *'     # 5 AM PKT  (Midnight UTC)
-    - cron: '0 8 * * *'     # 1 PM PKT  (8 AM UTC)
-    - cron: '0 16 * * *'    # 9 PM PKT  (4 PM UTC)
+    - cron: '0 0 * * *'     # 5 AM PKT (Midnight UTC)
+    - cron: '0 8 * * *'     # 1 PM PKT (8 AM UTC)
+    - cron: '0 16 * * *'    # 9 PM PKT (4 PM UTC)
 
 jobs:
   trigger-promo:
