@@ -44,7 +44,7 @@ async function sendMessage(id, text) {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         messaging_type: "MESSAGE_TAG",
-        tag: "EVENT_REMINDER", // ✅ Updated for safe promotional messaging
+        tag: "EVENT_REMINDER", // ✅ Safe tag for promos
         recipient: { id },
         message: { text }
       })
@@ -69,13 +69,12 @@ async function generateMessage(firstName = "Player") {
   const urgency = ["Tonight only", "Don’t miss out", "Ends soon", "Hurry up", "Limited time"][Math.floor(Math.random() * 5)];
 
   const prompt = `
-Create a short, energetic, engaging casino promo under 35 words.
-Rules:
-- Start with "Hi ${firstName} 👋"
-- Mention: ${randomGames.join(", ")}
-- Include bonus info: "${BONUS_LINE}"
-- Add urgency: "${urgency}"
-- Use emojis like ${randomEmojis}
+Create a short, exciting, human-sounding casino promo under 35 words.
+- Start: Hi ${firstName} 👋
+- Games: ${randomGames.join(", ")}
+- Bonus: ${BONUS_LINE}
+- Urgency: ${urgency}
+- Emojis: ${randomEmojis}
 - End with: "Message us to unlock your bonus 💳"
 `;
 
@@ -104,24 +103,61 @@ Rules:
   }
 }
 
-// ===== MAIN AUTO PROMO RUNNER =====
+// ===== AUTO SYNC FALLBACK =====
+async function autoSyncIfEmpty() {
+  let users = readUsers();
+
+  if (!users.length) {
+    console.log("⚠️ users.json empty — running auto-sync before promo...");
+    try {
+      const url = `https://graph.facebook.com/v18.0/${PAGE_ID}/conversations?fields=participants.limit(100){id,name},updated_time&limit=100&access_token=${PAGE_ACCESS_TOKEN}`;
+      const res = await fetch(url);
+      const json = await res.json();
+
+      if (json.data) {
+        const freshUsers = json.data.map(c => {
+          const participant = c.participants?.data?.find(p => p.id !== PAGE_ID);
+          return participant
+            ? {
+                id: participant.id,
+                name: participant.name || "Player",
+                lastActive: new Date(c.updated_time).getTime(),
+                lastSent: 0
+              }
+            : null;
+        }).filter(Boolean);
+
+        fs.writeFileSync(USERS_FILE, JSON.stringify(freshUsers, null, 2));
+        console.log(`✅ Auto-synced ${freshUsers.length} users successfully`);
+        users = freshUsers;
+      } else {
+        console.log("❌ Auto-sync failed — no data returned.");
+      }
+    } catch (err) {
+      console.error("❌ Auto-sync error:", err);
+    }
+  }
+
+  return users;
+}
+
+// ===== MAIN AUTO ONLINE PROMO =====
 async function autoOnlinePromo() {
   console.log(`📡 AutoOnlinePromo started at ${new Date().toLocaleString("en-US", { timeZone: "Asia/Karachi" })}`);
 
-  const users = readUsers();
+  let users = await autoSyncIfEmpty();
   if (!users.length) {
-    console.log("⚠️ No users found in users.json");
+    console.log("❌ No users available even after sync — exiting.");
     return;
   }
 
   const now = Date.now();
-  const recentlyActive = users.filter(u => now - u.lastActive <= 60 * 60 * 1000); // active within 1 hour
+  const recentlyActive = users.filter(u => now - u.lastActive <= 60 * 60 * 1000); // 1 hour active window
   if (!recentlyActive.length) {
     console.log("⚠️ No recently active users found");
     return;
   }
 
-  // Pick only up to 182 users (or fewer)
   const selectedUsers = recentlyActive.slice(0, 182);
   console.log(`🎯 Found ${recentlyActive.length} eligible users | Sending to: ${selectedUsers.length}`);
 
@@ -134,7 +170,7 @@ async function autoOnlinePromo() {
       u.lastSent = Date.now();
       sent++;
     }
-    await new Promise(r => setTimeout(r, 400)); // small delay for rate safety
+    await new Promise(r => setTimeout(r, 400));
   }
 
   writeUsers(users);
