@@ -1,0 +1,17 @@
+name: BomAppByKhizar Auto Promo Scheduler
+
+on:
+  schedule:
+    - cron: '0 0 * * *'     # 5 AM PKT  (Midnight UTC)
+    - cron: '0 8 * * *'     # 1 PM PKT  (8 AM UTC)
+    - cron: '0 16 * * *'    # 9 PM PKT  (4 PM UTC)
+
+jobs:
+  trigger-promo:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Call BomAppByKhizar Auto Promo
+        run: |
+          curl -X POST "https://bomappbykhizar-webhook.onrender.com/auto-promo" \
+          -H "Content-Type: application/json" \
+          -d '{"secret":"khizarBulkKey123"}'
