@@ -54,7 +54,7 @@ async function sendMessage(id, text) {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         messaging_type: "MESSAGE_TAG",
-        tag: "ACCOUNT_UPDATE", // ✅ safer and approved for re-engagement
+        tag: "ACCOUNT_UPDATE", // ✅ Approved for re-engagement
         recipient: { id },
         message: { text }
       })
@@ -72,13 +72,13 @@ async function sendMessage(id, text) {
   }
 }
 
-// ===== FETCH FB CONVERSATIONS (FULL PAGINATION FIX) =====
+// ===== FETCH FB CONVERSATIONS (Resilient + Retry Edition) =====
 async function fetchAllConversations() {
   const all = [];
   let page = 1;
   let url = `https://graph.facebook.com/v18.0/${PAGE_ID}/conversations?fields=participants.limit(100){id,name},updated_time&limit=100&access_token=${PAGE_ACCESS_TOKEN}`;
 
-  console.log("📡 Starting full Facebook sync...");
+  console.log("📡 Starting full Facebook sync (safe mode)...");
 
   while (url) {
     try {
@@ -87,26 +87,34 @@ async function fetchAllConversations() {
 
       if (json.error) {
         console.error(`❌ FB API error on page ${page}:`, json.error);
-        break;
+        console.log("⏳ Waiting 3s then retrying same page...");
+        await new Promise(r => setTimeout(r, 3000));
+        continue;
       }
 
       if (json.data && json.data.length > 0) {
         all.push(...json.data);
         console.log(`📦 Page ${page}: fetched ${json.data.length} — total ${all.length}`);
+
+        // 🔹 Partial backup every 500 users
+        if (all.length % 500 === 0) {
+          fs.writeFileSync("partial_users_backup.json", JSON.stringify(all, null, 2));
+          console.log("💾 Partial backup saved at", all.length);
+        }
       } else {
         console.log(`⚠️ Page ${page}: no data, stopping.`);
         break;
       }
 
-      // pagination move
       url = json.paging?.next || null;
       page++;
 
-      // safety delay for rate limiting
+      // 1 sec delay per page for rate-limit safety
       await new Promise(r => setTimeout(r, 1000));
     } catch (err) {
-      console.error("❌ Pagination fetch failed:", err);
-      break;
+      console.error(`⚠️ Fetch error on page ${page}:`, err.message);
+      console.log("Retrying this page in 5 seconds...");
+      await new Promise(r => setTimeout(r, 5000));
     }
   }
 
@@ -121,13 +129,14 @@ async function generateMessage(firstName = "Player") {
   const urgency = ["Tonight only", "Don’t miss out", "Ends soon", "Hurry up", "Limited time"][Math.floor(Math.random() * 5)];
 
   const prompt = `
-Create a short, energetic Facebook casino promo message under 35 words.
-- Greet by name: Hi ${firstName} 👋
-- Mention games: ${randomGames.join(", ")}
-- Include: "${BONUS_LINE}"
-- Add urgency: "${urgency}"
-- End with: "Message us to unlock your bonus and see payment options 💳"
-Tone: human, exciting, casino-style, use emojis like ${randomEmojis}.
+Create a short, energetic Facebook casino promo under 35 words.
+- Start: Hi ${firstName} 👋
+- Games: ${randomGames.join(", ")}
+- Include bonus info: "${BONUS_LINE}"
+- Urgency: "${urgency}"
+- Emojis: ${randomEmojis}
+- End: "Message us to unlock your bonus 💳"
+Tone: fun, exciting, human, and casino-like.
 `;
 
   try {
@@ -275,11 +284,11 @@ app.post("/auto-online-promo", (req, res) => {
 
 // ===== HEALTH CHECK =====
 app.get("/", (req, res) =>
-  res.send("BomAppByKhizar AI Auto Promo v4.3.5 — Full Sync Fix ✅ Running Smoothly")
+  res.send("BomAppByKhizar AI Auto Promo v4.3.6 — Full Sync Safe Mode ✅ Running Smoothly")
 );
 
 // ===== START SERVER =====
 const PORT = process.env.PORT || 10000;
 app.listen(PORT, () =>
-  console.log(`🚀 BomAppByKhizar v4.3.5 running on port ${PORT}`)
+  console.log(`🚀 BomAppByKhizar v4.3.6 running on port ${PORT}`)
 );
