@@ -25,7 +25,10 @@ const GAMES = [
   "Big Winner", "Game Room", "River Sweeps", "Mafia", "Yolo"
 ];
 const EMOJIS = ["🎰", "🔥", "💎", "💰", "🎮", "⭐", "⚡", "🎯", "🏆", "💫"];
-
+app.get("/count-users", (req, res) => {
+  const users = readUsers();
+  res.json({ totalUsers: users.length });
+});
 // ===== FILE HELPERS =====
 function readUsers() {
   try {
