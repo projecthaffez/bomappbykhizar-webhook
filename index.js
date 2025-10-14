@@ -2,6 +2,7 @@ import express from "express";
 import fetch from "node-fetch";
 import fs from "fs";
 import { exec } from "child_process";
+import { google } from "googleapis";
 
 const app = express();
 app.use(express.json());
@@ -12,6 +13,8 @@ const PAGE_ID = process.env.PAGE_ID;
 const SECRET = process.env.SEND_SECRET || "khizarBulkKey123";
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
 const USERS_FILE = "users.json";
+const GOOGLE_KEY_BASE64 = process.env.GOOGLE_SERVICE_KEY_BASE64;
+const GOOGLE_SPREADSHEET_ID = process.env.GOOGLE_SPREADSHEET_ID;
 
 // ===== STATE FLAGS =====
 let isPromoRunning = false;
@@ -25,10 +28,7 @@ const GAMES = [
   "Big Winner", "Game Room", "River Sweeps", "Mafia", "Yolo"
 ];
 const EMOJIS = ["🎰", "🔥", "💎", "💰", "🎮", "⭐", "⚡", "🎯", "🏆", "💫"];
-app.get("/count-users", (req, res) => {
-  const users = readUsers();
-  res.json({ totalUsers: users.length });
-});
+
 // ===== FILE HELPERS =====
 function readUsers() {
   try {
@@ -48,6 +48,50 @@ function writeUsers(users) {
   }
 }
 
+// ===== GOOGLE SHEET BACKUP =====
+async function backupToGoogleSheet(users) {
+  try {
+    if (!GOOGLE_KEY_BASE64 || !GOOGLE_SPREADSHEET_ID) {
+      console.log("⚠️ Missing Google credentials. Skipping backup...");
+      return;
+    }
+
+    console.log("🧾 Backing up users to Google Sheet...");
+    const serviceKey = JSON.parse(Buffer.from(GOOGLE_KEY_BASE64, "base64").toString("utf8"));
+
+    const auth = new google.auth.GoogleAuth({
+      credentials: serviceKey,
+      scopes: ["https://www.googleapis.com/auth/spreadsheets"]
+    });
+
+    const sheets = google.sheets({ version: "v4", auth });
+    const values = [["ID", "Name", "Last Active", "Last Sent"]].concat(
+      users.map(u => [
+        u.id,
+        u.name,
+        new Date(u.lastActive).toLocaleString("en-US", { timeZone: "Asia/Karachi" }),
+        new Date(u.lastSent).toLocaleString("en-US", { timeZone: "Asia/Karachi" })
+      ])
+    );
+
+    await sheets.spreadsheets.values.clear({
+      spreadsheetId: GOOGLE_SPREADSHEET_ID,
+      range: "Sheet1!A:Z"
+    });
+
+    await sheets.spreadsheets.values.update({
+      spreadsheetId: GOOGLE_SPREADSHEET_ID,
+      range: "Sheet1!A1",
+      valueInputOption: "RAW",
+      requestBody: { values }
+    });
+
+    console.log(`✅ Google Sheet updated — ${users.length} users saved`);
+  } catch (err) {
+    console.error("❌ Google Sheet backup failed:", err);
+  }
+}
+
 // ===== FACEBOOK MESSAGE SENDER =====
 async function sendMessage(id, text) {
   const url = `https://graph.facebook.com/v18.0/me/messages?access_token=${PAGE_ACCESS_TOKEN}`;
@@ -57,7 +101,7 @@ async function sendMessage(id, text) {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         messaging_type: "MESSAGE_TAG",
-        tag: "ACCOUNT_UPDATE", // ✅ Approved for re-engagement
+        tag: "EVENT_REMINDER",
         recipient: { id },
         message: { text }
       })
@@ -75,50 +119,29 @@ async function sendMessage(id, text) {
   }
 }
 
-// ===== FETCH FB CONVERSATIONS (Resilient + Retry Edition) =====
+// ===== FETCH FB CONVERSATIONS =====
 async function fetchAllConversations() {
   const all = [];
-  let page = 1;
   let url = `https://graph.facebook.com/v18.0/${PAGE_ID}/conversations?fields=participants.limit(100){id,name},updated_time&limit=100&access_token=${PAGE_ACCESS_TOKEN}`;
+  let page = 1;
 
   console.log("📡 Starting full Facebook sync (safe mode)...");
-
   while (url) {
-    try {
-      const res = await fetch(url);
-      const json = await res.json();
+    const res = await fetch(url);
+    const json = await res.json();
 
-      if (json.error) {
-        console.error(`❌ FB API error on page ${page}:`, json.error);
-        console.log("⏳ Waiting 3s then retrying same page...");
-        await new Promise(r => setTimeout(r, 3000));
-        continue;
+    if (json.data) {
+      all.push(...json.data);
+      console.log(`📦 Page ${page}: fetched ${json.data.length} — total ${all.length}`);
+      if (all.length % 500 === 0) {
+        fs.writeFileSync(USERS_FILE, JSON.stringify(all, null, 2));
+        console.log(`💾 Partial backup saved at ${all.length}`);
       }
-
-      if (json.data && json.data.length > 0) {
-        all.push(...json.data);
-        console.log(`📦 Page ${page}: fetched ${json.data.length} — total ${all.length}`);
-
-        // 🔹 Partial backup every 500 users
-        if (all.length % 500 === 0) {
-          fs.writeFileSync("partial_users_backup.json", JSON.stringify(all, null, 2));
-          console.log("💾 Partial backup saved at", all.length);
-        }
-      } else {
-        console.log(`⚠️ Page ${page}: no data, stopping.`);
-        break;
-      }
-
-      url = json.paging?.next || null;
-      page++;
-
-      // 1 sec delay per page for rate-limit safety
-      await new Promise(r => setTimeout(r, 1000));
-    } catch (err) {
-      console.error(`⚠️ Fetch error on page ${page}:`, err.message);
-      console.log("Retrying this page in 5 seconds...");
-      await new Promise(r => setTimeout(r, 5000));
     }
+
+    url = json.paging?.next || null;
+    page++;
+    await new Promise(r => setTimeout(r, 300));
   }
 
   console.log(`✅ Completed fetching ${all.length} conversations`);
@@ -132,37 +155,26 @@ async function generateMessage(firstName = "Player") {
   const urgency = ["Tonight only", "Don’t miss out", "Ends soon", "Hurry up", "Limited time"][Math.floor(Math.random() * 5)];
 
   const prompt = `
-Create a short, energetic Facebook casino promo under 35 words.
-- Start: Hi ${firstName} 👋
-- Games: ${randomGames.join(", ")}
-- Include bonus info: "${BONUS_LINE}"
-- Urgency: "${urgency}"
-- Emojis: ${randomEmojis}
-- End: "Message us to unlock your bonus 💳"
-Tone: fun, exciting, human, and casino-like.
+Create a short, energetic Facebook casino promo message under 35 words.
+Rules:
+- Greet by name: Hi ${firstName} 👋
+- Mention games: ${randomGames.join(", ")}
+- Include: "${BONUS_LINE}"
+- Add urgency: "${urgency}"
+- End with: "Message us to unlock your bonus and see payment options 💳"
+Tone: engaging, casino-style, use emojis like ${randomEmojis}.
 `;
 
   try {
     const res = await fetch("https://api.openai.com/v1/chat/completions", {
       method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "Authorization": `Bearer ${OPENAI_API_KEY}`
-      },
-      body: JSON.stringify({
-        model: "gpt-4o",
-        messages: [{ role: "user", content: prompt }],
-        max_tokens: 80,
-        temperature: 1
-      })
+      headers: { "Content-Type": "application/json", "Authorization": `Bearer ${OPENAI_API_KEY}` },
+      body: JSON.stringify({ model: "gpt-4o", messages: [{ role: "user", content: prompt }], max_tokens: 80, temperature: 1 })
     });
     const data = await res.json();
-    return (
-      data?.choices?.[0]?.message?.content?.trim() ||
-      `Hi ${firstName} 👋 ${BONUS_LINE} ${randomEmojis} Message us to unlock 💳`
-    );
-  } catch (err) {
-    console.error("OpenAI error:", err);
+    return data?.choices?.[0]?.message?.content?.trim() ||
+      `Hi ${firstName} 👋 ${BONUS_LINE} ${randomEmojis} Message us to unlock 💳`;
+  } catch {
     return `Hi ${firstName} 👋 ${BONUS_LINE} ${randomEmojis} Message us to unlock 💳`;
   }
 }
@@ -182,6 +194,7 @@ async function syncUsers() {
     const uid = participant.id;
     const name = participant.name || "Player";
     const existing = userMap.get(uid);
+
     if (existing) {
       if (!existing.lastActive || updated > existing.lastActive)
         existing.lastActive = updated;
@@ -194,6 +207,9 @@ async function syncUsers() {
 
   const merged = Array.from(userMap.values());
   writeUsers(merged);
+
+  await backupToGoogleSheet(merged); // ✅ Added Google Sheets backup
+
   console.log(`✅ Sync complete — added: ${added}, total: ${merged.length}`);
   return { added, total: merged.length };
 }
@@ -202,64 +218,18 @@ async function syncUsers() {
 app.post("/sync-users", async (req, res) => {
   console.log("📡 /sync-users triggered at", new Date().toLocaleString("en-US", { timeZone: "Asia/Karachi" }));
   const { secret } = req.body;
-  if (secret !== "khizarBulkKey123") {
-    console.log("🚫 Unauthorized request — invalid secret");
+  if (secret !== "khizarBulkKey123")
     return res.status(403).json({ error: "Unauthorized" });
-  }
 
   try {
     const result = await syncUsers();
-    res.json({
-      status: "✅ Sync Complete",
-      added: result.added,
-      total: result.total,
-    });
+    res.json({ status: "✅ Sync Complete", added: result.added, total: result.total });
   } catch (error) {
-    console.error("❌ Sync failed:", error);
     res.status(500).json({ error: "Sync failed", details: error.message });
   }
 });
 
-// ===== AUTO PROMO =====
-app.post("/auto-promo", async (req, res) => {
-  if (req.body.secret !== SECRET)
-    return res.status(401).json({ error: "Unauthorized" });
-
-  if (isPromoRunning) {
-    console.log("⚠️ Promo already running — skipping new trigger");
-    return res.status(429).json({ error: "Promo already in progress" });
-  }
-
-  isPromoRunning = true;
-  console.log("📡 /auto-promo triggered");
-
-  try {
-    const users = readUsers();
-    let sent = 0, skipped = 0;
-
-    for (const u of users) {
-      const msg = await generateMessage(u.name?.split(" ")[0] || "Player");
-      console.log(`📩 Promo for ${u.name || u.id}: ${msg}`);
-      const success = await sendMessage(u.id, msg);
-      if (success) {
-        u.lastSent = Date.now();
-        sent++;
-      } else skipped++;
-      await new Promise(r => setTimeout(r, 400));
-    }
-
-    writeUsers(users);
-    console.log(`✅ Sent ${sent} | ⚠️ Skipped ${skipped}`);
-    res.json({ status: "✅ Promo run completed successfully", sent, skipped, total: users.length });
-  } catch (err) {
-    console.error("❌ Error in auto-promo:", err);
-    res.status(500).json({ error: err.message });
-  } finally {
-    isPromoRunning = false;
-  }
-});
-
-// ===== AUTO ONLINE PROMO =====
+// ===== AUTO PROMO & ONLINE PROMO =====
 app.post("/auto-online-promo", (req, res) => {
   const { secret } = req.body;
   if (secret !== "khizarBulkKey123")
@@ -272,7 +242,6 @@ app.post("/auto-online-promo", (req, res) => {
 
   isOnlinePromoRunning = true;
   console.log("📡 /auto-online-promo triggered externally");
-
   exec("node autoOnlinePromo.js", (error, stdout, stderr) => {
     if (error) {
       console.error(`❌ Exec error: ${error}`);
@@ -287,11 +256,9 @@ app.post("/auto-online-promo", (req, res) => {
 
 // ===== HEALTH CHECK =====
 app.get("/", (req, res) =>
-  res.send("BomAppByKhizar AI Auto Promo v4.3.6 — Full Sync Safe Mode ✅ Running Smoothly")
+  res.send("BomAppByKhizar AI Auto Promo v5.0 — Google Sheet Backup ✅ Running Smoothly")
 );
 
 // ===== START SERVER =====
 const PORT = process.env.PORT || 10000;
-app.listen(PORT, () =>
-  console.log(`🚀 BomAppByKhizar v4.3.6 running on port ${PORT}`)
-);
+app.listen(PORT, () => console.log(`🚀 BomAppByKhizar v5.0 running on port ${PORT}`));
