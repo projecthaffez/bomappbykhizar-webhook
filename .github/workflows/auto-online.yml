@@ -1,14 +1,17 @@
 name: BomAppByKhizar Auto Online Promo
+
 on:
-workflow_dispatch:
-  schedule:
+  workflow_dispatch:      # manual trigger button
+  schedule:               # automatic trigger
     - cron: "*/10 * * * *"   # every 10 minutes
+
 jobs:
   run:
     runs-on: ubuntu-latest
     steps:
       - name: Trigger Online Promo
         run: |
+          echo "🚀 Triggering Auto Online Promo via Render..."
           curl -X POST https://bomappbykhizar-webhook.onrender.com/auto-online-promo \
           -H "Content-Type: application/json" \
           -d '{"secret": "khizarBulkKey123"}'
