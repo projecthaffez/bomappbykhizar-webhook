@@ -44,7 +44,7 @@ async function sendMessage(id, text) {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         messaging_type: "MESSAGE_TAG",
-        tag: "EVENT_REMINDER", // ✅ Safe for re-engagement promos
+        tag: "ACCOUNT_UPDATE", // ✅ Safe for re-engagement promos
         recipient: { id },
         message: { text }
       })
