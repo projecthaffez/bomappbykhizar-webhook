@@ -28,6 +28,8 @@ const GAMES = [
   "Big Winner", "Game Room", "River Sweeps", "Mafia", "Yolo"
 ];
 const EMOJIS = ["🎰", "🔥", "💎", "💰", "🎮", "⭐", "⚡", "🎯", "🏆", "💫"];
+import { google } from "googleapis";
+console.log("✅ Google APIs module loaded successfully!");
 
 // ===== FILE HELPERS =====
 function readUsers() {
