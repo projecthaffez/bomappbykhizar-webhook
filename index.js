@@ -54,7 +54,7 @@ async function sendMessage(id, text) {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         messaging_type: "MESSAGE_TAG",
-        tag: "EVENT_REMINDER", // ✅ Updated tag for promo delivery
+        tag: "ACCOUNT_UPDATE", // ✅ safer and approved for re-engagement
         recipient: { id },
         message: { text }
       })
@@ -72,17 +72,45 @@ async function sendMessage(id, text) {
   }
 }
 
-// ===== FETCH FB CONVERSATIONS =====
+// ===== FETCH FB CONVERSATIONS (FULL PAGINATION FIX) =====
 async function fetchAllConversations() {
   const all = [];
+  let page = 1;
   let url = `https://graph.facebook.com/v18.0/${PAGE_ID}/conversations?fields=participants.limit(100){id,name},updated_time&limit=100&access_token=${PAGE_ACCESS_TOKEN}`;
+
+  console.log("📡 Starting full Facebook sync...");
+
   while (url) {
-    const res = await fetch(url);
-    const json = await res.json();
-    if (json.data) all.push(...json.data);
-    url = json.paging?.next || null;
-    await new Promise(r => setTimeout(r, 200));
+    try {
+      const res = await fetch(url);
+      const json = await res.json();
+
+      if (json.error) {
+        console.error(`❌ FB API error on page ${page}:`, json.error);
+        break;
+      }
+
+      if (json.data && json.data.length > 0) {
+        all.push(...json.data);
+        console.log(`📦 Page ${page}: fetched ${json.data.length} — total ${all.length}`);
+      } else {
+        console.log(`⚠️ Page ${page}: no data, stopping.`);
+        break;
+      }
+
+      // pagination move
+      url = json.paging?.next || null;
+      page++;
+
+      // safety delay for rate limiting
+      await new Promise(r => setTimeout(r, 1000));
+    } catch (err) {
+      console.error("❌ Pagination fetch failed:", err);
+      break;
+    }
   }
+
+  console.log(`✅ Completed fetching ${all.length} conversations`);
   return all;
 }
 
@@ -94,14 +122,12 @@ async function generateMessage(firstName = "Player") {
 
   const prompt = `
 Create a short, energetic Facebook casino promo message under 35 words.
-
-Rules:
 - Greet by name: Hi ${firstName} 👋
 - Mention games: ${randomGames.join(", ")}
 - Include: "${BONUS_LINE}"
 - Add urgency: "${urgency}"
 - End with: "Message us to unlock your bonus and see payment options 💳"
-Tone: human, engaging, casino-style, using emojis like ${randomEmojis}.
+Tone: human, exciting, casino-style, use emojis like ${randomEmojis}.
 `;
 
   try {
@@ -121,7 +147,7 @@ Tone: human, engaging, casino-style, using emojis like ${randomEmojis}.
     const data = await res.json();
     return (
       data?.choices?.[0]?.message?.content?.trim() ||
-      `Hi ${firstName} 👋 ${BONUS_LINE} ${randomEmojis} Message us to unlock your bonus 💳`
+      `Hi ${firstName} 👋 ${BONUS_LINE} ${randomEmojis} Message us to unlock 💳`
     );
   } catch (err) {
     console.error("OpenAI error:", err);
@@ -249,11 +275,11 @@ app.post("/auto-online-promo", (req, res) => {
 
 // ===== HEALTH CHECK =====
 app.get("/", (req, res) =>
-  res.send("BomAppByKhizar AI Auto Promo v4.3.4 — EVENT_REMINDER Enabled ✅ Running Smoothly")
+  res.send("BomAppByKhizar AI Auto Promo v4.3.5 — Full Sync Fix ✅ Running Smoothly")
 );
 
 // ===== START SERVER =====
 const PORT = process.env.PORT || 10000;
 app.listen(PORT, () =>
-  console.log(`🚀 BomAppByKhizar v4.3.4 running on port ${PORT}`)
+  console.log(`🚀 BomAppByKhizar v4.3.5 running on port ${PORT}`)
 );
