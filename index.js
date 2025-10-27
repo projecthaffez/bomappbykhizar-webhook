@@ -3,7 +3,7 @@ import fetch from "node-fetch";
 import fs from "fs";
 import { exec } from "child_process";
 import { google } from "googleapis";
-import cron from "node-cron"; // ✅ cron scheduler
+import cron from "node-cron";
 
 const app = express();
 app.use(express.json());
@@ -18,17 +18,7 @@ const GOOGLE_KEY_BASE64 = process.env.GOOGLE_SERVICE_KEY_BASE64;
 const GOOGLE_SPREADSHEET_ID = process.env.GOOGLE_SPREADSHEET_ID;
 
 // ===== STATE FLAGS =====
-let isPromoRunning = false;
 let isOnlinePromoRunning = false;
-
-// ===== CONSTANTS =====
-const BONUS_LINE = "Signup Bonus 150%-200% | Regular Bonus 80%-100%";
-const GAMES = [
-  "Vblink", "Orion Stars", "Fire Kirin", "Milky Way", "Panda Master",
-  "Juwa City", "Game Vault", "Ultra Panda", "Cash Machine",
-  "Big Winner", "Game Room", "River Sweeps", "Mafia", "Yolo"
-];
-const EMOJIS = ["🎰", "🔥", "💎", "💰", "🎮", "⭐", "⚡", "🎯", "🏆", "💫"];
 
 // ===== FILE HELPERS =====
 function readUsers() {
@@ -93,63 +83,60 @@ async function backupToGoogleSheet(users) {
   }
 }
 
-// ===== FACEBOOK MESSAGE SENDER =====
-async function sendMessage(id, text) {
-  const url = `https://graph.facebook.com/v18.0/me/messages?access_token=${PAGE_ACCESS_TOKEN}`;
-  try {
-    const res = await fetch(url, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        messaging_type: "MESSAGE_TAG",
-        tag: "EVENT_REMINDER",
-        recipient: { id },
-        message: { text }
-      })
-    });
-    const j = await res.json();
-    if (j.error && j.error.code === 100) {
-      console.log(`⚠️ Skipping invalid user ${id}`);
-      return false;
+// ===== SYNC USERS =====
+async function syncUsers() {
+  console.log("📡 Sync started...");
+  const users = readUsers();
+  const userMap = new Map(users.map(u => [u.id, u]));
+  const convos = []; // Placeholder for your fetchAllConversations() function call
+
+  let added = 0;
+  for (const c of convos) {
+    const updated = new Date(c.updated_time).getTime();
+    const participant = c.participants?.data?.find(p => p.id !== PAGE_ID);
+    if (!participant) continue;
+    const uid = participant.id;
+    const name = participant.name || "Player";
+    const existing = userMap.get(uid);
+
+    if (existing) {
+      if (!existing.lastActive || updated > existing.lastActive)
+        existing.lastActive = updated;
+      existing.name = name;
+    } else {
+      userMap.set(uid, { id: uid, name, lastActive: updated, lastSent: 0 });
+      added++;
     }
-    if (j.error) console.error("FB API error:", j.error);
-    return true;
-  } catch (err) {
-    console.error("Send message failed:", err);
-    return false;
   }
+
+  const merged = Array.from(userMap.values());
+  writeUsers(merged);
+  await backupToGoogleSheet(merged);
+  console.log(`✅ Sync complete — added: ${added}, total: ${merged.length}`);
+
+  // 🧾 Save sync stats
+  fs.writeFileSync("sync_stats.json", JSON.stringify({
+    timestamp: new Date(),
+    added,
+    total: merged.length
+  }, null, 2));
+
+  return { added, total: merged.length };
 }
 
-// ===== AI PROMO MESSAGE =====
-async function generateMessage(firstName = "Player") {
-  const randomGames = GAMES.sort(() => 0.5 - Math.random()).slice(0, 5);
-  const randomEmojis = EMOJIS.sort(() => 0.5 - Math.random()).slice(0, 3).join(" ");
-  const urgency = ["Tonight only", "Don’t miss out", "Ends soon", "Hurry up", "Limited time"][Math.floor(Math.random() * 5)];
-
-  const prompt = `
-Create a short, energetic Facebook casino promo message under 35 words.
-Rules:
-- Greet by name: Hi ${firstName} 👋
-- Mention games: ${randomGames.join(", ")}
-- Include: "${BONUS_LINE}"
-- Add urgency: "${urgency}"
-- End with: "Message us to unlock your bonus and see payment options 💳"
-Tone: engaging, casino-style, use emojis like ${randomEmojis}.
-`;
+// ===== /SYNC-USERS ENDPOINT =====
+app.post("/sync-users", async (req, res) => {
+  const { secret } = req.body;
+  if (secret !== "khizarBulkKey123")
+    return res.status(403).json({ error: "Unauthorized" });
 
   try {
-    const res = await fetch("https://api.openai.com/v1/chat/completions", {
-      method: "POST",
-      headers: { "Content-Type": "application/json", "Authorization": `Bearer ${OPENAI_API_KEY}` },
-      body: JSON.stringify({ model: "gpt-4o", messages: [{ role: "user", content: prompt }], max_tokens: 80, temperature: 1 })
-    });
-    const data = await res.json();
-    return data?.choices?.[0]?.message?.content?.trim() ||
-      `Hi ${firstName} 👋 ${BONUS_LINE} ${randomEmojis} Message us to unlock 💳`;
-  } catch {
-    return `Hi ${firstName} 👋 ${BONUS_LINE} ${randomEmojis} Message us to unlock 💳`;
+    const result = await syncUsers();
+    res.json({ status: "✅ Sync Complete", ...result });
+  } catch (error) {
+    res.status(500).json({ error: "Sync failed", details: error.message });
   }
-}
+});
 
 // ===== AUTO PROMO EXECUTION FUNCTION =====
 async function triggerAutoOnlinePromo(label) {
@@ -159,6 +146,7 @@ async function triggerAutoOnlinePromo(label) {
   }
   console.log(`🕒 [${label}] Triggering autoOnlinePromo.js...`);
   isOnlinePromoRunning = true;
+
   exec("node autoOnlinePromo.js", (error, stdout, stderr) => {
     if (error) {
       console.error(`❌ ${label} failed:`, error.message);
@@ -171,22 +159,30 @@ async function triggerAutoOnlinePromo(label) {
 }
 
 // ===== AUTO PROMO CRON SCHEDULER (USA Player Timing) =====
-// 🇵🇰 You operate from Pakistan → 🇺🇸 Players are active at these times (converted to UTC)
-
-// 8:00 AM PKT → 03:00 UTC → USA players' night (most active)
 cron.schedule("0 3 * * *", () => triggerAutoOnlinePromo("🌙 US Night Players Promo (8AM PKT)"));
-
-// 8:00 PM PKT → 15:00 UTC → USA players' morning (fresh start)
 cron.schedule("0 15 * * *", () => triggerAutoOnlinePromo("🌅 US Morning Players Promo (8PM PKT)"));
-
-// 12:00 AM PKT → 19:00 UTC → USA players' afternoon (lunch break)
 cron.schedule("0 19 * * *", () => triggerAutoOnlinePromo("🌞 US Noon Players Promo (12AM PKT)"));
+
+// ===== API ENDPOINTS FOR STATS =====
+app.get("/promo-stats", (req, res) => {
+  if (!fs.existsSync("promo_stats.json"))
+    return res.json({ sent: 0, failed: 0, lastRun: null });
+  const stats = JSON.parse(fs.readFileSync("promo_stats.json", "utf8"));
+  res.json(stats);
+});
+
+app.get("/sync-stats", (req, res) => {
+  if (!fs.existsSync("sync_stats.json"))
+    return res.json({ added: 0, total: 0, lastSync: null });
+  const stats = JSON.parse(fs.readFileSync("sync_stats.json", "utf8"));
+  res.json(stats);
+});
 
 // ===== HEALTH CHECK =====
 app.get("/", (req, res) =>
-  res.send("BomAppByKhizar AI Auto Promo v5.3 — USA Player Timing Optimized ✅")
+  res.send("BomAppByKhizar AI Auto Promo v5.4 — Stats Tracking + USA Timings ✅")
 );
 
 // ===== START SERVER =====
 const PORT = process.env.PORT || 10000;
-app.listen(PORT, () => console.log(`🚀 BomAppByKhizar v5.3 running on port ${PORT}`));
+app.listen(PORT, () => console.log(`🚀 BomAppByKhizar v5.4 running on port ${PORT}`));
