@@ -6,6 +6,7 @@ const PAGE_ACCESS_TOKEN = process.env.PAGE_ACCESS_TOKEN;
 const PAGE_ID = process.env.PAGE_ID;
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
 const USERS_FILE = "users.json";
+const PAUSE_FILE = "promo.paused"; // ✅ Pause flag file
 
 // ===== CONSTANTS =====
 const BONUS_LINE = "Signup Bonus 150%-200% | Regular Bonus 80%-100%";
@@ -23,16 +24,21 @@ function readUsers() {
       return JSON.parse(fs.readFileSync(USERS_FILE, "utf8"));
     }
   } catch (err) {
-    console.error("Error reading users.json", err);
+    console.error("❌ Error reading users.json", err);
   }
   return [];
 }
+
 function writeUsers(users) {
   try {
     fs.writeFileSync(USERS_FILE, JSON.stringify(users, null, 2));
   } catch (err) {
-    console.error("Error writing users.json", err);
+    console.error("❌ Error writing users.json", err);
   }
+}
+
+function isPaused() {
+  return fs.existsSync(PAUSE_FILE);
 }
 
 // ===== FACEBOOK MESSAGE SENDER =====
@@ -44,7 +50,7 @@ async function sendMessage(id, text) {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         messaging_type: "MESSAGE_TAG",
-        tag: "ACCOUNT_UPDATE", // ✅ Safe for re-engagement promos
+        tag: "ACCOUNT_UPDATE", // ✅ Safe re-engagement tag
         recipient: { id },
         message: { text }
       })
@@ -60,7 +66,7 @@ async function sendMessage(id, text) {
     }
     return true;
   } catch (err) {
-    console.error("Send message failed:", err);
+    console.error("❌ Send message failed:", err);
     return false;
   }
 }
@@ -101,7 +107,7 @@ Create a short, exciting casino promo (under 35 words).
       `Hi ${firstName} 👋 ${BONUS_LINE} ${randomEmojis} Message us to unlock 💳`
     );
   } catch (err) {
-    console.error("OpenAI error:", err);
+    console.error("❌ OpenAI error:", err);
     return `Hi ${firstName} 👋 ${BONUS_LINE} ${randomEmojis} Message us to unlock 💳`;
   }
 }
@@ -146,7 +152,14 @@ async function autoSyncIfEmpty() {
 
 // ===== MAIN AUTO ONLINE PROMO =====
 async function autoOnlinePromo() {
-  console.log(`📡 AutoOnlinePromo started at ${new Date().toLocaleString("en-US", { timeZone: "Asia/Karachi" })}`);
+  const startTime = new Date().toLocaleString("en-US", { timeZone: "Asia/Karachi" });
+  console.log(`📡 AutoOnlinePromo started at ${startTime}`);
+
+  // ✅ Check if promo paused
+  if (isPaused()) {
+    console.log("⏸️ Promo is currently paused. Aborting execution.");
+    return;
+  }
 
   let users = await autoSyncIfEmpty();
   if (!users.length) {
@@ -167,7 +180,13 @@ async function autoOnlinePromo() {
   let sent = 0, failed = 0, skipped = 0;
 
   for (const u of selectedUsers) {
-    // ✅ skip if promo sent in last 30 mins (cooldown)
+    // Mid-run pause check
+    if (isPaused()) {
+      console.log("⏸️ Detected pause mid-run — stopping immediately.");
+      break;
+    }
+
+    // Cooldown skip
     if (u.lastSent && (now - u.lastSent < 30 * 60 * 1000)) {
       console.log(`⏸️ Skipping ${u.name} — last promo sent recently`);
       skipped++;
@@ -183,25 +202,29 @@ async function autoOnlinePromo() {
     } else {
       failed++;
     }
+
+    // Slow down to prevent FB rate limits
     await new Promise(r => setTimeout(r, 400));
   }
 
   writeUsers(users);
 
-  console.log(`✅ AutoOnlinePromo finished — Sent: ${sent} | Failed: ${failed} | Skipped: ${skipped}`);
-
-  // ===== 🧾 Save promo stats =====
-  fs.writeFileSync("promo_stats.json", JSON.stringify({
+  // ===== Save promo stats =====
+  const stats = {
     timestamp: new Date(),
+    startedAt: startTime,
     sent,
     failed,
     skipped,
     totalActive: recentlyActive.length,
-    totalUsers: users.length
-  }, null, 2));
+    totalUsers: users.length,
+    pausedDuringRun: isPaused()
+  };
+  fs.writeFileSync("promo_stats.json", JSON.stringify(stats, null, 2));
 
+  console.log(`✅ AutoOnlinePromo finished — Sent: ${sent} | Failed: ${failed} | Skipped: ${skipped}`);
   console.log("💾 Saved promo_stats.json successfully");
 }
 
-// Run when file executed directly
+// ===== Run when file executed directly =====
 autoOnlinePromo();
