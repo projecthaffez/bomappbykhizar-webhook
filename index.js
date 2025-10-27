@@ -3,6 +3,7 @@ import fetch from "node-fetch";
 import fs from "fs";
 import { exec } from "child_process";
 import { google } from "googleapis";
+import cron from "node-cron"; // ✅ cron scheduler
 
 const app = express();
 app.use(express.json());
@@ -28,7 +29,6 @@ const GAMES = [
   "Big Winner", "Game Room", "River Sweeps", "Mafia", "Yolo"
 ];
 const EMOJIS = ["🎰", "🔥", "💎", "💰", "🎮", "⭐", "⚡", "🎯", "🏆", "💫"];
-
 
 // ===== FILE HELPERS =====
 function readUsers() {
@@ -120,35 +120,6 @@ async function sendMessage(id, text) {
   }
 }
 
-// ===== FETCH FB CONVERSATIONS =====
-async function fetchAllConversations() {
-  const all = [];
-  let url = `https://graph.facebook.com/v18.0/${PAGE_ID}/conversations?fields=participants.limit(100){id,name},updated_time&limit=100&access_token=${PAGE_ACCESS_TOKEN}`;
-  let page = 1;
-
-  console.log("📡 Starting full Facebook sync (safe mode)...");
-  while (url) {
-    const res = await fetch(url);
-    const json = await res.json();
-
-    if (json.data) {
-      all.push(...json.data);
-      console.log(`📦 Page ${page}: fetched ${json.data.length} — total ${all.length}`);
-      if (all.length % 500 === 0) {
-        fs.writeFileSync(USERS_FILE, JSON.stringify(all, null, 2));
-        console.log(`💾 Partial backup saved at ${all.length}`);
-      }
-    }
-
-    url = json.paging?.next || null;
-    page++;
-    await new Promise(r => setTimeout(r, 300));
-  }
-
-  console.log(`✅ Completed fetching ${all.length} conversations`);
-  return all;
-}
-
 // ===== AI PROMO MESSAGE =====
 async function generateMessage(firstName = "Player") {
   const randomGames = GAMES.sort(() => 0.5 - Math.random()).slice(0, 5);
@@ -180,86 +151,42 @@ Tone: engaging, casino-style, use emojis like ${randomEmojis}.
   }
 }
 
-// ===== SYNC USERS =====
-async function syncUsers() {
-  console.log("📡 Sync started...");
-  const users = readUsers();
-  const userMap = new Map(users.map(u => [u.id, u]));
-  const convos = await fetchAllConversations();
-
-  let added = 0;
-  for (const c of convos) {
-    const updated = new Date(c.updated_time).getTime();
-    const participant = c.participants?.data?.find(p => p.id !== PAGE_ID);
-    if (!participant) continue;
-    const uid = participant.id;
-    const name = participant.name || "Player";
-    const existing = userMap.get(uid);
-
-    if (existing) {
-      if (!existing.lastActive || updated > existing.lastActive)
-        existing.lastActive = updated;
-      existing.name = name;
-    } else {
-      userMap.set(uid, { id: uid, name, lastActive: updated, lastSent: 0 });
-      added++;
-    }
-  }
-
-  const merged = Array.from(userMap.values());
-  writeUsers(merged);
-
-  await backupToGoogleSheet(merged); // ✅ Added Google Sheets backup
-
-  console.log(`✅ Sync complete — added: ${added}, total: ${merged.length}`);
-  return { added, total: merged.length };
-}
-
-// ===== /SYNC-USERS ENDPOINT =====
-app.post("/sync-users", async (req, res) => {
-  console.log("📡 /sync-users triggered at", new Date().toLocaleString("en-US", { timeZone: "Asia/Karachi" }));
-  const { secret } = req.body;
-  if (secret !== "khizarBulkKey123")
-    return res.status(403).json({ error: "Unauthorized" });
-
-  try {
-    const result = await syncUsers();
-    res.json({ status: "✅ Sync Complete", added: result.added, total: result.total });
-  } catch (error) {
-    res.status(500).json({ error: "Sync failed", details: error.message });
-  }
-});
-
-// ===== AUTO PROMO & ONLINE PROMO =====
-app.post("/auto-online-promo", (req, res) => {
-  const { secret } = req.body;
-  if (secret !== "khizarBulkKey123")
-    return res.status(401).json({ error: "Unauthorized" });
-
+// ===== AUTO PROMO EXECUTION FUNCTION =====
+async function triggerAutoOnlinePromo(label) {
   if (isOnlinePromoRunning) {
-    console.log("⚠️ Online Promo already running — skipping new trigger");
-    return res.status(429).json({ error: "Online Promo already in progress" });
+    console.log(`⚠️ ${label} skipped — already running`);
+    return;
   }
-
+  console.log(`🕒 [${label}] Triggering autoOnlinePromo.js...`);
   isOnlinePromoRunning = true;
-  console.log("📡 /auto-online-promo triggered externally");
   exec("node autoOnlinePromo.js", (error, stdout, stderr) => {
     if (error) {
-      console.error(`❌ Exec error: ${error}`);
-      isOnlinePromoRunning = false;
-      return res.status(500).json({ error: error.message });
+      console.error(`❌ ${label} failed:`, error.message);
+    } else {
+      console.log(`✅ ${label} completed successfully`);
+      console.log(stdout);
     }
-    console.log(stdout);
     isOnlinePromoRunning = false;
-    res.json({ status: "✅ AutoOnlinePromo executed successfully" });
   });
-});
+}
+
+// ===== AUTO PROMO CRON SCHEDULER (USA Player Timing) =====
+// 🇵🇰 You operate from Pakistan → 🇺🇸 Players are active at these times (converted to UTC)
+
+// 8:00 AM PKT → 03:00 UTC → USA players' night (most active)
+cron.schedule("0 3 * * *", () => triggerAutoOnlinePromo("🌙 US Night Players Promo (8AM PKT)"));
+
+// 8:00 PM PKT → 15:00 UTC → USA players' morning (fresh start)
+cron.schedule("0 15 * * *", () => triggerAutoOnlinePromo("🌅 US Morning Players Promo (8PM PKT)"));
+
+// 12:00 AM PKT → 19:00 UTC → USA players' afternoon (lunch break)
+cron.schedule("0 19 * * *", () => triggerAutoOnlinePromo("🌞 US Noon Players Promo (12AM PKT)"));
 
 // ===== HEALTH CHECK =====
 app.get("/", (req, res) =>
-  res.send("BomAppByKhizar AI Auto Promo v5.0 — Google Sheet Backup ✅ Running Smoothly")
+  res.send("BomAppByKhizar AI Auto Promo v5.3 — USA Player Timing Optimized ✅")
 );
 
 // ===== START SERVER =====
 const PORT = process.env.PORT || 10000;
-app.listen(PORT, () => console.log(`🚀 BomAppByKhizar v5.0 running on port ${PORT}`));
+app.listen(PORT, () => console.log(`🚀 BomAppByKhizar v5.3 running on port ${PORT}`));
