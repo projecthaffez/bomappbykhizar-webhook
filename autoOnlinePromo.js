@@ -51,10 +51,13 @@ async function sendMessage(id, text) {
     });
     const j = await res.json();
     if (j.error && j.error.code === 100) {
-      console.log(`⚠️ Skipping invalid user ${id}`);
+      console.log(`⚠️ Invalid user ${id} — skipping`);
       return false;
     }
-    if (j.error) console.error("FB API error:", j.error);
+    if (j.error) {
+      console.error("FB API error:", j.error);
+      return false;
+    }
     return true;
   } catch (err) {
     console.error("Send message failed:", err);
@@ -161,7 +164,8 @@ async function autoOnlinePromo() {
   const selectedUsers = recentlyActive.slice(0, 182);
   console.log(`🎯 Found ${recentlyActive.length} eligible users | Sending to: ${selectedUsers.length}`);
 
-  let sent = 0, skipped = 0;
+  let sent = 0, failed = 0, skipped = 0;
+
   for (const u of selectedUsers) {
     // ✅ skip if promo sent in last 30 mins (cooldown)
     if (u.lastSent && (now - u.lastSent < 30 * 60 * 1000)) {
@@ -171,17 +175,32 @@ async function autoOnlinePromo() {
     }
 
     const msg = await generateMessage(u.name?.split(" ")[0] || "Player");
-    console.log(`📩 Sending to ${u.name || u.id}: ${msg}`);
+    console.log(`📩 Sending to ${u.name || u.id}...`);
     const success = await sendMessage(u.id, msg);
     if (success) {
       u.lastSent = Date.now();
       sent++;
+    } else {
+      failed++;
     }
     await new Promise(r => setTimeout(r, 400));
   }
 
   writeUsers(users);
-  console.log(`✅ AutoOnlinePromo finished — Sent: ${sent} | Skipped: ${skipped} | Saved updates to users.json`);
+
+  console.log(`✅ AutoOnlinePromo finished — Sent: ${sent} | Failed: ${failed} | Skipped: ${skipped}`);
+
+  // ===== 🧾 Save promo stats =====
+  fs.writeFileSync("promo_stats.json", JSON.stringify({
+    timestamp: new Date(),
+    sent,
+    failed,
+    skipped,
+    totalActive: recentlyActive.length,
+    totalUsers: users.length
+  }, null, 2));
+
+  console.log("💾 Saved promo_stats.json successfully");
 }
 
 // Run when file executed directly
