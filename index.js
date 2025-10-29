@@ -269,11 +269,22 @@ app.get("/promo/status", (req, res) => {
   res.json({ paused: isPromoPaused(), running: !isPromoPaused(), isOnlinePromoRunning });
 });
 
+// ===== 🧠 AI MESSAGE PREVIEW (NEW) =====
+app.get("/ai-preview", async (req, res) => {
+  try {
+    const message = "Hi Player 👋 Signup Bonus 150%-200% | Regular Bonus 80%-100%! 💰 Message us to unlock your bonus 💳";
+    res.json({ message });
+  } catch (err) {
+    console.error("AI Preview Error:", err);
+    res.status(500).json({ error: "AI preview failed" });
+  }
+});
+
 // ===== HEALTH CHECK =====
 app.get("/", (req, res) =>
-  res.send("BomAppByKhizar v6.0 — Manual Promo + Pause/Resume Added ✅")
+  res.send("BomAppByKhizar v7.0 — AI Preview + Pause/Resume + Manual Promo ✅")
 );
 
 // ===== START SERVER =====
 const PORT = process.env.PORT || 10000;
-app.listen(PORT, () => console.log(`🚀 BomAppByKhizar v6.0 running on port ${PORT}`));
+app.listen(PORT, () => console.log(`🚀 BomAppByKhizar v7.0 running on port ${PORT}`));
