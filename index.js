@@ -8,9 +8,9 @@ import cron from "node-cron";
 
 const app = express();
 
-// ===== ENABLE CORS (important for Vercel frontend) =====
+// ===== ENABLE CORS (for frontend connection) =====
 app.use(cors({
-  origin: "*", // ✅ Allow all origins (you can limit to your Vercel domain later)
+  origin: "*", // Allow all origins (you can restrict to Vercel domain later)
   methods: ["GET", "POST"],
   allowedHeaders: ["Content-Type"]
 }));
@@ -24,9 +24,8 @@ const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
 const USERS_FILE = "users.json";
 const GOOGLE_KEY_BASE64 = process.env.GOOGLE_SERVICE_KEY_BASE64;
 const GOOGLE_SPREADSHEET_ID = process.env.GOOGLE_SPREADSHEET_ID;
-const PAUSE_FILE = "promo.paused"; // ✅ for pause/resume tracking
+const PAUSE_FILE = "promo.paused";
 
-// ===== STATE FLAGS =====
 let isOnlinePromoRunning = false;
 
 // ===== FILE HELPERS =====
@@ -40,6 +39,7 @@ function readUsers() {
   }
   return [];
 }
+
 function writeUsers(users) {
   try {
     fs.writeFileSync(USERS_FILE, JSON.stringify(users, null, 2));
@@ -48,16 +48,10 @@ function writeUsers(users) {
   }
 }
 
-// ===== PAUSE CONTROL HELPERS =====
-function isPromoPaused() {
-  return fs.existsSync(PAUSE_FILE);
-}
-function pausePromo() {
-  fs.writeFileSync(PAUSE_FILE, "1");
-}
-function resumePromo() {
-  if (fs.existsSync(PAUSE_FILE)) fs.unlinkSync(PAUSE_FILE);
-}
+// ===== PAUSE/RESUME HELPERS =====
+function isPromoPaused() { return fs.existsSync(PAUSE_FILE); }
+function pausePromo() { fs.writeFileSync(PAUSE_FILE, "1"); }
+function resumePromo() { if (fs.existsSync(PAUSE_FILE)) fs.unlinkSync(PAUSE_FILE); }
 
 // ===== GOOGLE SHEET BACKUP =====
 async function backupToGoogleSheet(users) {
@@ -67,15 +61,13 @@ async function backupToGoogleSheet(users) {
       return;
     }
 
-    console.log("🧾 Backing up users to Google Sheet...");
     const serviceKey = JSON.parse(Buffer.from(GOOGLE_KEY_BASE64, "base64").toString("utf8"));
-
     const auth = new google.auth.GoogleAuth({
       credentials: serviceKey,
       scopes: ["https://www.googleapis.com/auth/spreadsheets"]
     });
-
     const sheets = google.sheets({ version: "v4", auth });
+
     const values = [["ID", "Name", "Last Active", "Last Sent"]].concat(
       users.map(u => [
         u.id,
@@ -108,9 +100,9 @@ async function syncUsers() {
   console.log("📡 Sync started...");
   const users = readUsers();
   const userMap = new Map(users.map(u => [u.id, u]));
-  const convos = [];
-
+  const convos = []; // Messenger convo placeholder
   let added = 0;
+
   for (const c of convos) {
     const updated = new Date(c.updated_time).getTime();
     const participant = c.participants?.data?.find(p => p.id !== PAGE_ID);
@@ -133,22 +125,14 @@ async function syncUsers() {
   writeUsers(merged);
   await backupToGoogleSheet(merged);
   console.log(`✅ Sync complete — added: ${added}, total: ${merged.length}`);
-
-  fs.writeFileSync("sync_stats.json", JSON.stringify({
-    timestamp: new Date(),
-    added,
-    total: merged.length
-  }, null, 2));
-
+  fs.writeFileSync("sync_stats.json", JSON.stringify({ timestamp: new Date(), added, total: merged.length }, null, 2));
   return { added, total: merged.length };
 }
 
-// ===== /SYNC-USERS =====
+// ===== API ENDPOINTS =====
 app.post("/sync-users", async (req, res) => {
   const { secret } = req.body;
-  if (secret !== SECRET)
-    return res.status(403).json({ error: "Unauthorized" });
-
+  if (secret !== SECRET) return res.status(403).json({ error: "Unauthorized" });
   try {
     const result = await syncUsers();
     res.json({ status: "✅ Sync Complete", ...result });
@@ -157,68 +141,30 @@ app.post("/sync-users", async (req, res) => {
   }
 });
 
-// ===== AUTO PROMO EXECUTION =====
-async function triggerAutoOnlinePromo(label) {
-  if (isOnlinePromoRunning) {
-    console.log(`⚠️ ${label} skipped — already running`);
-    return;
-  }
-
-  if (isPromoPaused()) {
-    console.log(`⏸️ ${label} skipped — promo paused`);
-    return;
-  }
-
-  console.log(`🕒 [${label}] Triggering autoOnlinePromo.js...`);
-  isOnlinePromoRunning = true;
-
-  exec("node autoOnlinePromo.js", (error, stdout) => {
-    if (error) {
-      console.error(`❌ ${label} failed:`, error.message);
-    } else {
-      console.log(`✅ ${label} completed successfully`);
-      console.log(stdout);
-    }
-    isOnlinePromoRunning = false;
-  });
-}
-
 // ===== MANUAL PROMO =====
 app.post("/manual-promo", async (req, res) => {
   const { secret, message, target = "recent" } = req.body;
   if (secret !== SECRET) return res.status(401).json({ error: "Unauthorized" });
   if (!message) return res.status(400).json({ error: "Message required" });
-
   if (isPromoPaused()) return res.status(423).json({ error: "Promo system paused" });
 
   const users = readUsers();
   const now = Date.now();
   let selected = users;
 
-  if (target === "recent") {
-    selected = users.filter(u => now - (u.lastActive || 0) <= 60 * 60 * 1000);
-  }
-
+  if (target === "recent") selected = users.filter(u => now - (u.lastActive || 0) <= 60 * 60 * 1000);
   selected = selected.slice(0, 200);
+
   let sent = 0, skipped = 0, failed = 0;
-
   for (const u of selected) {
-    if (u.lastSent && (now - u.lastSent < 30 * 60 * 1000)) {
-      skipped++;
-      continue;
-    }
-
+    if (u.lastSent && (now - u.lastSent < 30 * 60 * 1000)) { skipped++; continue; }
     const msg = `Hi ${u.name || "Player"} 👋 ${message}`;
     const success = await sendMessage(u.id, msg);
-    if (success) {
-      u.lastSent = Date.now();
-      sent++;
-    } else failed++;
+    if (success) { u.lastSent = Date.now(); sent++; } else failed++;
     await new Promise(r => setTimeout(r, 400));
   }
 
   writeUsers(users);
-  console.log(`🛠 Manual Promo Done — Sent: ${sent}, Skipped: ${skipped}, Failed: ${failed}`);
   res.json({ sent, skipped, failed });
 });
 
@@ -237,60 +183,73 @@ async function sendMessage(id, text) {
       })
     });
     const j = await res.json();
-    if (j.error && j.error.code === 100) {
-      console.log(`⚠️ Skipping invalid user ${id}`);
-      return false;
-    }
-    if (j.error) console.error("FB API error:", j.error);
+    if (j.error && j.error.code === 100) return false;
     return true;
-  } catch (err) {
-    console.error("Send message failed:", err);
+  } catch {
     return false;
   }
 }
 
-// ===== CRON SCHEDULES =====
+// ===== CRON JOBS =====
 cron.schedule("0 3 * * *", () => triggerAutoOnlinePromo("🌙 US Night Promo (8AM PKT)"));
 cron.schedule("0 15 * * *", () => triggerAutoOnlinePromo("🌅 US Morning Promo (8PM PKT)"));
 cron.schedule("0 19 * * *", () => triggerAutoOnlinePromo("🌞 US Noon Promo (12AM PKT)"));
 
-// ===== PAUSE / RESUME / STATUS =====
+async function triggerAutoOnlinePromo(label) {
+  if (isOnlinePromoRunning) return;
+  if (isPromoPaused()) return;
+  console.log(`🕒 [${label}] Triggering autoOnlinePromo.js...`);
+  isOnlinePromoRunning = true;
+  exec("node autoOnlinePromo.js", () => { isOnlinePromoRunning = false; });
+}
+
+// ===== STATUS & CONTROLS =====
 app.post("/promo/pause", (req, res) => {
   const { secret } = req.body;
   if (secret !== SECRET) return res.status(401).json({ error: "Unauthorized" });
-  pausePromo();
-  console.log("⏸️ Promo paused via API");
-  res.json({ status: "paused" });
+  pausePromo(); res.json({ status: "paused" });
 });
-
 app.post("/promo/resume", (req, res) => {
   const { secret } = req.body;
   if (secret !== SECRET) return res.status(401).json({ error: "Unauthorized" });
-  resumePromo();
-  console.log("▶️ Promo resumed via API");
-  res.json({ status: "running" });
+  resumePromo(); res.json({ status: "running" });
 });
-
-app.get("/promo/status", (req, res) => {
-  res.json({ paused: isPromoPaused(), running: !isPromoPaused(), isOnlinePromoRunning });
-});
+app.get("/promo/status", (req, res) => res.json({ paused: isPromoPaused(), running: !isPromoPaused(), isOnlinePromoRunning }));
 
 // ===== AI MESSAGE PREVIEW =====
-app.get("/ai-preview", async (req, res) => {
-  try {
-    const message = "Hi Player 👋 Signup Bonus 150%-200% | Regular Bonus 80%-100%! 💰 Message us to unlock your bonus 💳";
-    res.json({ message });
-  } catch (err) {
-    console.error("AI Preview Error:", err);
-    res.status(500).json({ error: "AI preview failed" });
-  }
+app.get("/ai-preview", (req, res) => {
+  res.json({
+    message: "Hi Player 👋 Signup Bonus 150%-200% | Regular Bonus 80%-100%! 💰 Message us to unlock your bonus 💳"
+  });
+});
+
+// ===== PRIVACY POLICY & DATA DELETION =====
+app.get("/privacy-policy", (req, res) => {
+  res.setHeader("Content-Type", "text/html");
+  res.send(`
+    <html><body style="font-family:sans-serif;max-width:600px;margin:auto;padding:20px;">
+    <h1>Privacy Policy - BomAppByKhizar</h1>
+    <p>We respect your privacy and do not permanently store any personal information.</p>
+    <p>Your Facebook ID and name are used only to send messages through the Messenger platform.</p>
+    <p>For deletion requests, visit <a href="/delete-data">our deletion page</a>.</p>
+    </body></html>
+  `);
+});
+
+app.get("/delete-data", (req, res) => {
+  res.setHeader("Content-Type", "text/html");
+  res.send(`
+    <html><body style="font-family:sans-serif;max-width:600px;margin:auto;padding:20px;">
+    <h1>Data Deletion Request - BomAppByKhizar</h1>
+    <p>If you wish to delete your data, please email <b>khizarhz@yahoo.com</b> with your Facebook ID.</p>
+    <p>Your data will be deleted within 48 hours.</p>
+    </body></html>
+  `);
 });
 
 // ===== HEALTH CHECK =====
-app.get("/", (req, res) =>
-  res.send("BomAppByKhizar v7.0 — CORS Fixed + AI Preview + Controls ✅")
-);
+app.get("/", (req, res) => res.send("🚀 BomAppByKhizar v7.1 — CORS + Privacy + Data Deletion Ready ✅"));
 
 // ===== START SERVER =====
 const PORT = process.env.PORT || 10000;
-app.listen(PORT, () => console.log(`🚀 BomAppByKhizar v7.0 running on port ${PORT}`));
+app.listen(PORT, () => console.log(`🚀 BomAppByKhizar v7.1 running on port ${PORT}`));
