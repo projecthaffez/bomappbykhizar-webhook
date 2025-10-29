@@ -1,4 +1,5 @@
 import express from "express";
+import cors from "cors";
 import fetch from "node-fetch";
 import fs from "fs";
 import { exec } from "child_process";
@@ -6,6 +7,13 @@ import { google } from "googleapis";
 import cron from "node-cron";
 
 const app = express();
+
+// ===== ENABLE CORS (important for Vercel frontend) =====
+app.use(cors({
+  origin: "*", // ✅ Allow all origins (you can limit to your Vercel domain later)
+  methods: ["GET", "POST"],
+  allowedHeaders: ["Content-Type"]
+}));
 app.use(express.json());
 
 // ===== CONFIG =====
@@ -100,7 +108,7 @@ async function syncUsers() {
   console.log("📡 Sync started...");
   const users = readUsers();
   const userMap = new Map(users.map(u => [u.id, u]));
-  const convos = []; // Placeholder for your fetchAllConversations()
+  const convos = [];
 
   let added = 0;
   for (const c of convos) {
@@ -135,7 +143,7 @@ async function syncUsers() {
   return { added, total: merged.length };
 }
 
-// ===== /SYNC-USERS ENDPOINT =====
+// ===== /SYNC-USERS =====
 app.post("/sync-users", async (req, res) => {
   const { secret } = req.body;
   if (secret !== SECRET)
@@ -149,7 +157,7 @@ app.post("/sync-users", async (req, res) => {
   }
 });
 
-// ===== AUTO PROMO EXECUTION FUNCTION =====
+// ===== AUTO PROMO EXECUTION =====
 async function triggerAutoOnlinePromo(label) {
   if (isOnlinePromoRunning) {
     console.log(`⚠️ ${label} skipped — already running`);
@@ -164,7 +172,7 @@ async function triggerAutoOnlinePromo(label) {
   console.log(`🕒 [${label}] Triggering autoOnlinePromo.js...`);
   isOnlinePromoRunning = true;
 
-  exec("node autoOnlinePromo.js", (error, stdout, stderr) => {
+  exec("node autoOnlinePromo.js", (error, stdout) => {
     if (error) {
       console.error(`❌ ${label} failed:`, error.message);
     } else {
@@ -181,9 +189,7 @@ app.post("/manual-promo", async (req, res) => {
   if (secret !== SECRET) return res.status(401).json({ error: "Unauthorized" });
   if (!message) return res.status(400).json({ error: "Message required" });
 
-  if (isPromoPaused()) {
-    return res.status(423).json({ error: "Promo system paused" });
-  }
+  if (isPromoPaused()) return res.status(423).json({ error: "Promo system paused" });
 
   const users = readUsers();
   const now = Date.now();
@@ -193,7 +199,7 @@ app.post("/manual-promo", async (req, res) => {
     selected = users.filter(u => now - (u.lastActive || 0) <= 60 * 60 * 1000);
   }
 
-  selected = selected.slice(0, 200); // limit 200
+  selected = selected.slice(0, 200);
   let sent = 0, skipped = 0, failed = 0;
 
   for (const u of selected) {
@@ -243,12 +249,12 @@ async function sendMessage(id, text) {
   }
 }
 
-// ===== CRON (USA Player Timings) =====
-cron.schedule("0 3 * * *", () => triggerAutoOnlinePromo("🌙 US Night Players Promo (8AM PKT)"));
-cron.schedule("0 15 * * *", () => triggerAutoOnlinePromo("🌅 US Morning Players Promo (8PM PKT)"));
-cron.schedule("0 19 * * *", () => triggerAutoOnlinePromo("🌞 US Noon Players Promo (12AM PKT)"));
+// ===== CRON SCHEDULES =====
+cron.schedule("0 3 * * *", () => triggerAutoOnlinePromo("🌙 US Night Promo (8AM PKT)"));
+cron.schedule("0 15 * * *", () => triggerAutoOnlinePromo("🌅 US Morning Promo (8PM PKT)"));
+cron.schedule("0 19 * * *", () => triggerAutoOnlinePromo("🌞 US Noon Promo (12AM PKT)"));
 
-// ===== PAUSE / RESUME / STATUS ENDPOINTS =====
+// ===== PAUSE / RESUME / STATUS =====
 app.post("/promo/pause", (req, res) => {
   const { secret } = req.body;
   if (secret !== SECRET) return res.status(401).json({ error: "Unauthorized" });
@@ -269,7 +275,7 @@ app.get("/promo/status", (req, res) => {
   res.json({ paused: isPromoPaused(), running: !isPromoPaused(), isOnlinePromoRunning });
 });
 
-// ===== 🧠 AI MESSAGE PREVIEW (NEW) =====
+// ===== AI MESSAGE PREVIEW =====
 app.get("/ai-preview", async (req, res) => {
   try {
     const message = "Hi Player 👋 Signup Bonus 150%-200% | Regular Bonus 80%-100%! 💰 Message us to unlock your bonus 💳";
@@ -282,7 +288,7 @@ app.get("/ai-preview", async (req, res) => {
 
 // ===== HEALTH CHECK =====
 app.get("/", (req, res) =>
-  res.send("BomAppByKhizar v7.0 — AI Preview + Pause/Resume + Manual Promo ✅")
+  res.send("BomAppByKhizar v7.0 — CORS Fixed + AI Preview + Controls ✅")
 );
 
 // ===== START SERVER =====
