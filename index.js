@@ -94,6 +94,19 @@ async function backupToGoogleSheet(users) {
     console.error("❌ Google Sheet backup failed:", err);
   }
 }
+// ===== DEBUG USERS CHECK (temporary) =====
+app.get("/debug/users", (req, res) => {
+  try {
+    if (fs.existsSync("users.json")) {
+      const data = JSON.parse(fs.readFileSync("users.json", "utf8"));
+      res.json({ count: data.length, sample: data.slice(0, 5) });
+    } else {
+      res.json({ count: 0, message: "users.json file not found" });
+    }
+  } catch (err) {
+    res.status(500).json({ error: "Failed to read users.json", details: err.message });
+  }
+});
 
 // ===== SYNC USERS =====
 async function syncUsers() {
