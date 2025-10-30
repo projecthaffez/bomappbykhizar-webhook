@@ -10,7 +10,7 @@ const app = express();
 
 // ===== ENABLE CORS (for frontend connection) =====
 app.use(cors({
-  origin: "*", // Allow all origins (you can restrict to Vercel domain later)
+  origin: "*",
   methods: ["GET", "POST"],
   allowedHeaders: ["Content-Type"]
 }));
@@ -20,11 +20,11 @@ app.use(express.json());
 const PAGE_ACCESS_TOKEN = process.env.PAGE_ACCESS_TOKEN;
 const PAGE_ID = process.env.PAGE_ID;
 const SECRET = process.env.SEND_SECRET || "khizarBulkKey123";
-const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
 const USERS_FILE = "users.json";
 const GOOGLE_KEY_BASE64 = process.env.GOOGLE_SERVICE_KEY_BASE64;
 const GOOGLE_SPREADSHEET_ID = process.env.GOOGLE_SPREADSHEET_ID;
 const PAUSE_FILE = "promo.paused";
+const PROMO_STATS_FILE = "promo_stats.json";
 
 let isOnlinePromoRunning = false;
 
@@ -100,7 +100,7 @@ async function syncUsers() {
   console.log("📡 Sync started...");
   const users = readUsers();
   const userMap = new Map(users.map(u => [u.id, u]));
-  const convos = []; // Messenger convo placeholder
+  const convos = [];
   let added = 0;
 
   for (const c of convos) {
@@ -124,7 +124,6 @@ async function syncUsers() {
   const merged = Array.from(userMap.values());
   writeUsers(merged);
   await backupToGoogleSheet(merged);
-  console.log(`✅ Sync complete — added: ${added}, total: ${merged.length}`);
   fs.writeFileSync("sync_stats.json", JSON.stringify({ timestamp: new Date(), added, total: merged.length }, null, 2));
   return { added, total: merged.length };
 }
@@ -165,7 +164,30 @@ app.post("/manual-promo", async (req, res) => {
   }
 
   writeUsers(users);
+
+  // ✅ Save promo stats
+  fs.writeFileSync(PROMO_STATS_FILE, JSON.stringify({
+    sent,
+    skipped,
+    failed,
+    lastRun: new Date().toLocaleString("en-US", { timeZone: "Asia/Karachi" })
+  }, null, 2));
+
   res.json({ sent, skipped, failed });
+});
+
+// ===== PROMO STATS ENDPOINT =====
+app.get("/promo-stats", (req, res) => {
+  try {
+    if (fs.existsSync(PROMO_STATS_FILE)) {
+      const stats = JSON.parse(fs.readFileSync(PROMO_STATS_FILE, "utf8"));
+      return res.json(stats);
+    }
+    res.json({ sent: 0, skipped: 0, failed: 0, lastRun: "Never" });
+  } catch (err) {
+    console.error("Error reading promo_stats.json:", err);
+    res.status(500).json({ error: "Failed to load stats" });
+  }
 });
 
 // ===== FACEBOOK MESSAGE SENDER =====
@@ -248,8 +270,8 @@ app.get("/delete-data", (req, res) => {
 });
 
 // ===== HEALTH CHECK =====
-app.get("/", (req, res) => res.send("🚀 BomAppByKhizar v7.1 — CORS + Privacy + Data Deletion Ready ✅"));
+app.get("/", (req, res) => res.send("🚀 BomAppByKhizar v7.2 — Stats + Privacy + Promo Ready ✅"));
 
 // ===== START SERVER =====
 const PORT = process.env.PORT || 10000;
-app.listen(PORT, () => console.log(`🚀 BomAppByKhizar v7.1 running on port ${PORT}`));
+app.listen(PORT, () => console.log(`🚀 BomAppByKhizar v7.2 running on port ${PORT}`));
